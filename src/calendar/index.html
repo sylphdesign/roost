@@ -1,0 +1,319 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta http-equiv="Content-Security-Policy" content="default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self' data: https:; connect-src 'none'">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Google Calendar</title>
+  <link rel="stylesheet" href="calendar.css">
+</head>
+<body>
+  <!-- Loading / fatal error -->
+  <section id="screen-loading" class="screen center-screen">
+    <div class="spinner" aria-hidden="true"></div>
+    <p id="loading-text" class="muted" role="status">Loading…</p>
+    <button id="loading-retry" class="btn" type="button" hidden>Try again</button>
+  </section>
+
+  <!-- 1. Setup -->
+  <section id="screen-setup" class="screen scroll-screen" hidden>
+    <div class="setup-card">
+      <div class="brand-mark" aria-hidden="true"><span data-icon="calendar"></span></div>
+      <h1>Connect Google Calendar</h1>
+      <p class="lead">
+        Google blocks its normal sign-in inside desktop apps, so Roost uses Google's official
+        Calendar connection instead. You create your own free key once. It takes about 10 minutes,
+        and nobody else sees your calendar.
+      </p>
+      <p class="setup-hint">
+        <span data-icon="info"></span>
+        <span>If you already set up Gmail in Roost, you can use the same Client ID and secret.
+          Just do steps 2 and 3 for Calendar in the same project.</span>
+      </p>
+
+      <ol class="steps">
+        <li>
+          <div class="step-text">
+            <strong>Create a project</strong>
+            <span>Open Google Cloud Console and create a new project (any name).</span>
+          </div>
+          <button class="btn btn-small" type="button" data-url="https://console.cloud.google.com/projectcreate">
+            Open <span data-icon="external"></span>
+          </button>
+        </li>
+        <li>
+          <div class="step-text">
+            <strong>Enable the Google Calendar API</strong>
+            <span>Make sure your project is selected, then click Enable.</span>
+          </div>
+          <button class="btn btn-small" type="button" data-url="https://console.cloud.google.com/apis/library/calendar-json.googleapis.com">
+            Open <span data-icon="external"></span>
+          </button>
+        </li>
+        <li>
+          <div class="step-text">
+            <strong>Set up the consent screen</strong>
+            <span>In “Google Auth Platform”, choose <em>External</em> and fill in an app name and your email.
+              Under <em>Audience</em>, add your Google address(es) as Test users.
+              Leave <em>Data Access</em> empty: Roost asks for Calendar access when you sign in.</span>
+          </div>
+          <button class="btn btn-small" type="button" data-url="https://console.cloud.google.com/auth/overview">
+            Open <span data-icon="external"></span>
+          </button>
+        </li>
+        <li>
+          <div class="step-text">
+            <strong>Create credentials</strong>
+            <span>Click <em>Create client</em>, choose Application type <em>Desktop app</em>,
+              then copy the Client ID and Client secret.</span>
+          </div>
+          <button class="btn btn-small" type="button" data-url="https://console.cloud.google.com/auth/clients">
+            Open <span data-icon="external"></span>
+          </button>
+        </li>
+      </ol>
+
+      <form id="setup-form" class="setup-form" novalidate>
+        <label class="field">
+          <span class="field-label">Client ID</span>
+          <input id="setup-client-id" type="text" autocomplete="off" spellcheck="false"
+                 placeholder="1234567890-abc.apps.googleusercontent.com">
+        </label>
+        <label class="field">
+          <span class="field-label">Client secret</span>
+          <input id="setup-client-secret" type="password" autocomplete="off" spellcheck="false"
+                 placeholder="GOCSPX-…">
+        </label>
+        <p id="setup-error" class="form-error" role="alert" hidden></p>
+        <div class="form-actions">
+          <button id="setup-cancel" class="btn btn-ghost" type="button" hidden>Cancel</button>
+          <button id="setup-save" class="btn btn-primary" type="submit">Save and continue</button>
+        </div>
+        <p class="note">
+          One key works for all your Google accounts. While the app is in Testing mode
+          Google asks you to sign in again every 7 days.
+        </p>
+      </form>
+    </div>
+  </section>
+
+  <!-- 2. Sign in -->
+  <section id="screen-signin" class="screen scroll-screen signin-screen" hidden>
+    <div class="signin-card">
+      <div class="brand-mark" aria-hidden="true"><span data-icon="calendar"></span></div>
+      <h1>Sign in to Google Calendar</h1>
+      <div id="signin-idle">
+        <p class="lead">Your browser opens so you can sign in with Google. Then come back here.</p>
+        <p class="lead" id="signin-expect" hidden></p>
+        <div class="checklist">
+          <p class="checklist-title">Made your key for Gmail? Do these two steps first:</p>
+          <div class="check-item">
+            <span class="check-num">1</span>
+            <span class="check-text">Enable the Google Calendar API in your project.</span>
+            <button class="btn btn-small" type="button" data-url="https://console.cloud.google.com/apis/library/calendar-json.googleapis.com">
+              Open <span data-icon="external"></span>
+            </button>
+          </div>
+          <div class="check-item">
+            <span class="check-num">2</span>
+            <span class="check-text">If your Google app is in <em>Testing</em>: add this Google address under
+              Google Auth Platform → <em>Audience</em> → Test users.</span>
+            <button class="btn btn-small" type="button" data-url="https://console.cloud.google.com/auth/audience">
+              Open <span data-icon="external"></span>
+            </button>
+          </div>
+        </div>
+        <button id="signin-btn" class="btn btn-primary btn-large" type="button">Sign in with Google</button>
+      </div>
+      <div id="signin-waiting" hidden>
+        <div class="spinner" aria-hidden="true"></div>
+        <p class="lead" role="status">Finish signing in in your browser…</p>
+        <p class="signin-tip">If Google says <b>“Access blocked … has not completed the Google verification process”</b>,
+          add this Google address under <b>Test users</b> in your Google Cloud project, then try again.
+          If Google says <b>“Google hasn’t verified this app”</b>, that is normal for your own key: click <b>Continue</b> (or <b>Advanced</b> → <b>Go to … (unsafe)</b>, then <b>Continue</b>). Tick every permission box.</p>
+        <div class="signin-wait-actions">
+          <button id="signin-test-users" class="btn" type="button">Open Test users</button>
+          <button id="signin-cancel" class="btn" type="button">Cancel</button>
+        </div>
+      </div>
+      <p id="signin-error" class="form-error" role="alert" hidden></p>
+      <button id="signin-change-key" class="link-btn" type="button">Change Google key</button>
+    </div>
+  </section>
+
+  <!-- 3. Calendar -->
+  <section id="screen-cal" class="screen cal" hidden>
+    <aside id="side" class="side" aria-label="Calendars">
+      <div class="mini" id="mini">
+        <div class="mini-head">
+          <span id="mini-title" class="mini-title"></span>
+          <button id="mini-prev" class="icon-btn small" type="button" aria-label="Previous month" title="Previous month">
+            <span data-icon="chevLeft"></span>
+          </button>
+          <button id="mini-next" class="icon-btn small" type="button" aria-label="Next month" title="Next month">
+            <span data-icon="chevRight"></span>
+          </button>
+        </div>
+        <div id="mini-grid" class="mini-grid" role="grid"></div>
+      </div>
+
+      <div class="side-section">
+        <div class="side-heading">My calendars</div>
+        <div id="cal-list" class="cal-list"></div>
+      </div>
+
+      <div class="side-foot">
+        <div class="account" id="account-email" title=""></div>
+        <button id="signout-btn" class="signout-btn" type="button">
+          <span data-icon="signout"></span> Sign out
+        </button>
+      </div>
+    </aside>
+    <div id="drawer-backdrop" class="drawer-backdrop" hidden></div>
+
+    <section class="main" aria-label="Calendar">
+      <header class="topbar">
+        <button id="menu-btn" class="icon-btn menu-btn" type="button" aria-label="Show calendars" title="Calendars">
+          <span data-icon="menu"></span>
+        </button>
+        <button id="today-btn" class="btn" type="button" title="Today (T)">Today</button>
+        <div class="nav-arrows">
+          <button id="prev-btn" class="icon-btn" type="button" aria-label="Previous" title="Previous (K)">
+            <span data-icon="chevLeft"></span>
+          </button>
+          <button id="next-btn" class="icon-btn" type="button" aria-label="Next" title="Next (J)">
+            <span data-icon="chevRight"></span>
+          </button>
+        </div>
+        <h2 id="range-title" class="range-title" aria-live="polite"></h2>
+        <span class="spacer"></span>
+        <div class="view-switch" role="tablist" aria-label="View">
+          <button type="button" role="tab" data-view="day" title="Day (D)">Day</button>
+          <button type="button" role="tab" data-view="week" title="Week (W)">Week</button>
+          <button type="button" role="tab" data-view="month" title="Month (M)">Month</button>
+        </div>
+        <button id="refresh-btn" class="icon-btn" type="button" aria-label="Refresh" title="Refresh">
+          <span data-icon="refresh"></span>
+        </button>
+        <button id="new-btn" class="btn btn-primary new-btn" type="button" title="New event (C)">
+          <span data-icon="plus"></span><span class="new-label">New event</span>
+        </button>
+      </header>
+
+      <div class="view-wrap">
+        <div id="view" class="view"></div>
+        <div id="view-loading" class="view-loading" hidden><div class="bar"></div></div>
+
+        <!-- Event details -->
+        <aside id="details" class="details" hidden aria-label="Event details" tabindex="-1"></aside>
+      </div>
+    </section>
+  </section>
+
+  <!-- Editor -->
+  <div id="editor-backdrop" class="modal-backdrop" hidden>
+    <div id="editor" class="modal editor" role="dialog" aria-modal="true" aria-labelledby="editor-title">
+      <header class="modal-head">
+        <h2 id="editor-title">New event</h2>
+        <button id="editor-close" class="icon-btn" type="button" aria-label="Close" title="Close">
+          <span data-icon="x"></span>
+        </button>
+      </header>
+      <form id="editor-form" class="editor-form" novalidate>
+        <input id="ed-title" class="ed-title" type="text" placeholder="Add title" aria-label="Title" autocomplete="off">
+
+        <div class="ed-row">
+          <span data-icon="clock" class="ed-icon"></span>
+          <div class="ed-body">
+            <div class="ed-when">
+              <div class="ed-dt">
+                <span class="ed-dt-label">Start</span>
+                <input id="ed-start-date" type="date" aria-label="Start date" required>
+                <input id="ed-start-time" type="time" aria-label="Start time" step="300">
+              </div>
+              <div class="ed-dt">
+                <span class="ed-dt-label">End</span>
+                <input id="ed-end-date" type="date" aria-label="End date" required>
+                <input id="ed-end-time" type="time" aria-label="End time" step="300">
+              </div>
+            </div>
+            <label class="toggle">
+              <input id="ed-allday" type="checkbox">
+              <span class="toggle-track" aria-hidden="true"></span>
+              <span>All day</span>
+            </label>
+            <span id="ed-duration" class="ed-duration"></span>
+          </div>
+        </div>
+
+        <div class="ed-row">
+          <span data-icon="calendar" class="ed-icon"></span>
+          <div class="ed-body">
+            <div class="select-wrap">
+              <span id="ed-cal-dot" class="dot"></span>
+              <select id="ed-calendar" aria-label="Calendar"></select>
+              <span data-icon="chevDown" class="select-caret"></span>
+            </div>
+          </div>
+        </div>
+
+        <div class="ed-row">
+          <span data-icon="pin" class="ed-icon"></span>
+          <div class="ed-body">
+            <input id="ed-location" class="ed-input" type="text" placeholder="Add location" aria-label="Location" autocomplete="off">
+          </div>
+        </div>
+
+        <div class="ed-row">
+          <span data-icon="users" class="ed-icon"></span>
+          <div class="ed-body">
+            <input id="ed-guests" class="ed-input" type="text" placeholder="Add guests (emails, comma-separated)" aria-label="Guests" autocomplete="off" spellcheck="false">
+          </div>
+        </div>
+
+        <div class="ed-row" id="ed-meet-row">
+          <span data-icon="video" class="ed-icon"></span>
+          <div class="ed-body">
+            <label class="check">
+              <input id="ed-meet" type="checkbox">
+              <span>Add Google Meet video call</span>
+            </label>
+          </div>
+        </div>
+
+        <div class="ed-row">
+          <span data-icon="text" class="ed-icon"></span>
+          <div class="ed-body">
+            <textarea id="ed-description" class="ed-input ed-textarea" placeholder="Add description" aria-label="Description" rows="4"></textarea>
+          </div>
+        </div>
+
+        <p id="ed-error" class="form-error" role="alert" hidden></p>
+
+        <footer class="modal-foot">
+          <span class="spacer"></span>
+          <button id="editor-cancel" class="btn btn-ghost" type="button">Cancel</button>
+          <button id="editor-save" class="btn btn-primary" type="submit">Save</button>
+        </footer>
+      </form>
+    </div>
+  </div>
+
+  <!-- Confirm -->
+  <div id="confirm-backdrop" class="modal-backdrop" hidden>
+    <div class="modal confirm" role="alertdialog" aria-modal="true" aria-labelledby="confirm-title" aria-describedby="confirm-text">
+      <h2 id="confirm-title">Delete event?</h2>
+      <p id="confirm-text" class="muted"></p>
+      <footer class="modal-foot">
+        <span class="spacer"></span>
+        <button id="confirm-cancel" class="btn btn-ghost" type="button">Cancel</button>
+        <button id="confirm-ok" class="btn btn-danger" type="button">Delete</button>
+      </footer>
+    </div>
+  </div>
+
+  <div id="toasts" class="toasts" aria-live="polite"></div>
+
+  <script src="calendar.js"></script>
+</body>
+</html>

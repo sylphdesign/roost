@@ -1,0 +1,151 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <meta http-equiv="Content-Security-Policy" content="default-src 'self'; img-src 'self' https: data:; style-src 'self'; script-src 'self'" />
+  <title>Roost</title>
+  <link rel="stylesheet" href="ui.css" />
+</head>
+<body>
+  <aside id="sidebar">
+    <div class="drag-top"></div>
+    <div id="lists" class="lists">
+      <ul id="list-mail" class="list" data-group="mail" aria-label="Email"></ul>
+      <div id="divider" class="divider" role="separator" hidden></div>
+      <ul id="list-chat" class="list" data-group="chat" aria-label="Messages"></ul>
+    </div>
+    <button id="add" class="add" title="Add app (⌘T)" aria-label="Add app">+</button>
+    <button id="dnd" class="side-btn dnd" title="Do Not Disturb (⌘⇧D)" aria-label="Do Not Disturb" aria-pressed="false">
+      <svg viewBox="0 0 24 24" width="20" height="20" aria-hidden="true"><path class="bell" d="M12 22a2.5 2.5 0 0 0 2.45-2h-4.9A2.5 2.5 0 0 0 12 22Zm7-6V11a7 7 0 0 0-5.5-6.84V3.5a1.5 1.5 0 0 0-3 0v.66A7 7 0 0 0 5 11v5l-2 2v1h18v-1l-2-2Z"/><path class="slash" d="M3 3 21 21" /></svg>
+    </button>
+    <button id="settings-btn" class="side-btn" title="Settings (⌘,)" aria-label="Settings">
+      <svg viewBox="0 0 24 24" width="20" height="20" aria-hidden="true" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="3"/><path d="M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 1 1-2.83 2.83l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 1 1-4 0v-.09A1.65 1.65 0 0 0 9 19.4a1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 1 1-2.83-2.83l.06-.06A1.65 1.65 0 0 0 4.68 15a1.65 1.65 0 0 0-1.51-1H3a2 2 0 1 1 0-4h.09A1.65 1.65 0 0 0 4.6 9a1.65 1.65 0 0 0-.33-1.82l-.06-.06a2 2 0 1 1 2.83-2.83l.06.06A1.65 1.65 0 0 0 9 4.68a1.65 1.65 0 0 0 1-1.51V3a2 2 0 1 1 4 0v.09a1.65 1.65 0 0 0 1 1.51 1.65 1.65 0 0 0 1.82-.33l.06-.06a2 2 0 1 1 2.83 2.83l-.06.06A1.65 1.65 0 0 0 19.4 9a1.65 1.65 0 0 0 1.51 1H21a2 2 0 1 1 0 4h-.09a1.65 1.65 0 0 0-1.51 1Z"/></svg>
+    </button>
+  </aside>
+
+  <header id="topbar">
+    <ul id="list-top" class="toplist" data-group="top" aria-label="Google apps"></ul>
+    <button id="add-top" class="top-add" title="Add a Google app to the top bar" aria-label="Add a Google app to the top bar">+</button>
+    <span id="top-account" class="top-account" hidden></span>
+    <span class="top-spacer"></span>
+    <button id="quiet-pill" class="quiet-pill" hidden></button>
+  </header>
+
+  <footer id="keybar" class="keybar" hidden aria-label="Keyboard shortcuts">
+    <div id="keybar-keys" class="keybar-keys"></div>
+    <button id="keybar-all" class="keybar-btn" type="button" title="All keyboard shortcuts">All shortcuts <kbd>⌘/</kbd></button>
+    <button id="keybar-hide" class="keybar-btn keybar-x" type="button" title="Hide this bar (View › Shortcut Bar brings it back)" aria-label="Hide shortcut bar">×</button>
+  </footer>
+
+  <main id="content">
+    <section id="welcome" hidden>
+      <h1>Welcome to Roost</h1>
+      <p>Put Gmail, WhatsApp, Slack, Telegram and Discord in one place.<br />Each account has its own private storage, so you can sign in to many accounts at once.</p>
+      <button id="welcome-add" class="primary">Add your first app</button>
+    </section>
+  </main>
+
+  <dialog id="search-dlg" class="search-dlg" aria-label="Search all inboxes">
+    <div class="sd-head">
+      <svg viewBox="0 0 24 24" width="18" height="18" aria-hidden="true" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><circle cx="11" cy="11" r="7"/><path d="m20 20-3.5-3.5"/></svg>
+      <input id="sd-input" type="search" placeholder="Search all inboxes" autocomplete="off" spellcheck="false" aria-label="Search all inboxes" />
+    </div>
+    <div id="sd-results" class="sd-results" role="listbox" aria-label="Results"></div>
+    <p class="sd-hint">Gmail search words work too: <code>from:</code> <code>subject:</code> <code>has:attachment</code> <code>is:unread</code> · ↑ ↓ move · Enter open · Esc close</p>
+  </dialog>
+
+  <dialog id="keys-dlg" class="keys-dlg" aria-labelledby="keys-title">
+    <div class="keys-body">
+      <h2 id="keys-title">Keyboard shortcuts</h2>
+      <div id="keys-list" class="keys-list"></div>
+      <div class="buttons"><button type="button" id="keys-close" class="primary">Done</button></div>
+    </div>
+  </dialog>
+
+  <dialog id="dlg">
+    <form id="form" method="dialog">
+      <h2 id="dlg-title">Add an app</h2>
+      <div id="presets" class="presets"></div>
+      <label>Name
+        <input id="f-name" maxlength="40" placeholder="e.g. Work Gmail" autocomplete="off" />
+      </label>
+      <label>Web address
+        <input id="f-url" placeholder="https://…" autocomplete="off" spellcheck="false" />
+      </label>
+      <label>Place in
+        <select id="f-group">
+          <option value="mail">Email – top of the sidebar</option>
+          <option value="chat">Messages – below the line</option>
+          <option value="top">Top bar</option>
+        </select>
+      </label>
+      <p id="f-error" class="error" hidden></p>
+      <div class="buttons">
+        <button type="button" id="f-cancel">Cancel</button>
+        <button type="submit" id="f-ok" class="primary">Add</button>
+      </div>
+    </form>
+  </dialog>
+
+  <dialog id="settings" class="settings" aria-labelledby="s-title">
+    <div class="s-wrap">
+      <header class="s-head">
+        <h2 id="s-title">Settings</h2>
+        <button type="button" id="s-close" class="s-x" aria-label="Close">✕</button>
+      </header>
+      <div class="s-body">
+        <section class="s-sec" id="sec-quiet">
+          <h3>Quiet time</h3>
+          <p class="s-note">When Roost is quiet, apps show no notifications and play no sounds. The app you are looking at can still play sound.</p>
+          <label class="row"><span><b>Do Not Disturb</b><small>Quiet until you turn it off (⌘⇧D).</small></span><input type="checkbox" id="s-dnd" class="switch" /></label>
+          <label class="row"><span><b>Quiet during calls</b><small>Zoom, Google Meet, Teams, FaceTime, WhatsApp … Roost is quiet while any app uses your microphone.</small></span><input type="checkbox" id="s-call" class="switch" /></label>
+          <div class="row"><label for="s-hours"><b>Quiet hours</b><small>Every day.</small></label>
+            <span class="hours"><input type="time" id="s-from" aria-label="Quiet hours start" /> to <input type="time" id="s-to" aria-label="Quiet hours end" /><input type="checkbox" id="s-hours" class="switch" /></span></div>
+          <p id="s-status" class="s-status"></p>
+        </section>
+
+        <section class="s-sec" id="sec-mailview">
+          <h3>Email view</h3>
+          <p class="s-note">For every Gmail inbox in Roost.</p>
+          <label class="row"><span><b>Open emails</b><small>Where an email shows when you click it.</small></span>
+            <select id="s-mv-pane"><option value="right">Next to the list</option><option value="below">Under the list</option><option value="off">Full screen (list hides)</option></select></label>
+          <label class="row"><span><b>List width</b><small>How wide the email list is next to the email.</small></span>
+            <select id="s-mv-width"><option value="narrow">Narrow</option><option value="normal">Normal</option><option value="wide">Wide</option></select></label>
+          <label class="row"><span><b>Rows in the list</b><small>Compact fits more emails on the screen.</small></span>
+            <select id="s-mv-density"><option value="comfortable">Comfortable</option><option value="compact">Compact</option></select></label>
+          <label class="row"><span><b>Show preview text</b><small>The first words of each email, under the subject.</small></span><input type="checkbox" id="s-mv-preview" class="switch" /></label>
+          <label class="row"><span><b>Show the labels column</b><small>Inbox, Starred, Sent and your labels on the left.</small></span><input type="checkbox" id="s-mv-labels" class="switch" /></label>
+          <p class="s-note">While you read, the ⤢ button (or the <b>\</b> key) hides the list for a full view of the email.</p>
+          <label class="row"><span><b>Show the shortcut bar</b><small>A slim bar at the bottom with the main keyboard shortcuts.</small></span><input type="checkbox" id="s-keybar" class="switch" /></label>
+        </section>
+
+        <section class="s-sec" id="sec-sound">
+          <h3>Sounds</h3>
+          <label class="row"><span><b>Play notification sounds</b><small>Off: all apps stay silent, but notifications still show.</small></span><input type="checkbox" id="s-sounds" class="switch" /></label>
+        </section>
+
+        <section class="s-sec" id="sec-apps">
+          <h3>Each app</h3>
+          <p class="s-note">Notifications: banners from this app. Sounds: its dings and ringtones. Badge: its count in the Dock and menu bar.</p>
+          <div id="s-apps" class="apps"></div>
+          <p id="s-chrome-note" class="s-note" hidden></p>
+        </section>
+
+        <section class="s-sec" id="sec-ai">
+          <h3>AI writing in Gmail</h3>
+          <p class="s-note">Roost's Gmail can write, refine and summarize email with Claude. Add your own Claude API key (from the Claude Console). Your email text goes to Claude only when you click an AI button. Claude bills your key for each use.</p>
+          <div class="ai-row">
+            <input type="password" id="s-ai-key" placeholder="sk-ant-…" autocomplete="off" spellcheck="false" aria-label="Claude API key" />
+            <button type="button" id="s-ai-save" class="primary">Save key</button>
+            <button type="button" id="s-ai-remove" class="ghost">Remove</button>
+          </div>
+          <p id="s-ai-state" class="s-status"></p>
+          <p class="s-note"><button type="button" id="s-ai-get" class="linkish">Get a Claude API key</button> · Google's own Gemini tools work only in real Gmail: use “Open in Gmail” in the compose window.</p>
+        </section>
+      </div>
+    </div>
+  </dialog>
+
+  <script src="ui.js"></script>
+</body>
+</html>

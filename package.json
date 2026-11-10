@@ -1,0 +1,70 @@
+{
+  "name": "roost",
+  "productName": "Roost",
+  "version": "0.1.0",
+  "description": "Roost: every conversation comes home. Gmail, Google Calendar, WhatsApp, Slack, Telegram, Discord and Google apps in one macOS window.",
+  "author": "sylphdesign",
+  "license": "MIT",
+  "homepage": "https://github.com/sylphdesign/roost#readme",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/sylphdesign/roost.git"
+  },
+  "bugs": {
+    "url": "https://github.com/sylphdesign/roost/issues"
+  },
+  "keywords": [
+    "gmail",
+    "whatsapp",
+    "slack",
+    "messenger",
+    "electron",
+    "macos",
+    "rambox",
+    "franz",
+    "email-client"
+  ],
+  "main": "src/main.js",
+  "scripts": {
+    "start": "electron .",
+    "test": "node --test test/*.test.js",
+    "dist": "npm run build:native && electron-builder --mac dmg --arm64",
+    "pack": "npm run build:native && electron-builder --mac dir --arm64",
+    "test:e2e": "electron test/recipes.e2e.js",
+    "build:native": "mkdir -p build/bin && clang -O2 -arch arm64 -mmacosx-version-min=12.0 -framework CoreAudio -o build/bin/mic-watch native/mic-watch.c",
+    "test:all": "node test/run-all.js",
+    "icons": "electron scripts/make-icons.js",
+    "screenshots": "node scripts/screenshots.js"
+  },
+  "build": {
+    "appId": "io.github.sylphdesign.roost",
+    "productName": "Roost",
+    "files": [
+      "src/**/*",
+      "package.json"
+    ],
+    "mac": {
+      "category": "public.app-category.productivity",
+      "extendInfo": {
+        "NSCameraUsageDescription": "Apps like WhatsApp, Slack and Discord use the camera for calls.",
+        "NSMicrophoneUsageDescription": "Apps like WhatsApp, Slack and Discord use the microphone for calls and voice notes."
+      },
+      "identity": "-",
+      "hardenedRuntime": false,
+      "icon": "build/icon.icns"
+    },
+    "extraResources": [
+      {
+        "from": "build/bin",
+        "to": "bin"
+      }
+    ]
+  },
+  "devDependencies": {
+    "electron": "^45.2.3",
+    "electron-builder": "^26.18.0"
+  },
+  "dependencies": {
+    "@anthropic-ai/sdk": "^1.6.0"
+  }
+}

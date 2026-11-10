@@ -1,0 +1,9 @@
+node_modules/
+dist/
+.smoke/
+.smoke-log.txt
+build/bin/
+.DS_Store
+*.log
+.env
+.env.*

@@ -1,0 +1,212 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta http-equiv="Content-Security-Policy" content="default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self' data: https: http: cid:; font-src 'self' data: https:; frame-src 'self' about: data:; connect-src 'none'">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Gmail</title>
+  <link rel="stylesheet" href="gmail.css">
+</head>
+<body>
+  <!-- Loading / fatal error -->
+  <section id="screen-loading" class="screen center-screen">
+    <div class="spinner" aria-hidden="true"></div>
+    <p id="loading-text" class="muted" role="status">Loading…</p>
+    <button id="loading-retry" class="btn" type="button" hidden>Try again</button>
+  </section>
+
+  <!-- 1. Setup -->
+  <section id="screen-setup" class="screen scroll-screen" hidden>
+    <div class="setup-card">
+      <div class="brand-mark" aria-hidden="true"><span data-icon="mail"></span></div>
+      <h1>Connect Gmail</h1>
+      <p class="lead">
+        Google blocks its normal sign-in inside desktop apps, so Roost uses Google's official
+        Gmail connection instead. You create your own free key once. It takes about 10 minutes,
+        and nobody else sees your mail.
+      </p>
+
+      <ol class="steps">
+        <li>
+          <div class="step-text">
+            <strong>Create a project</strong>
+            <span>Open Google Cloud Console and create a new project (any name).</span>
+          </div>
+          <button class="btn btn-small" type="button" data-url="https://console.cloud.google.com/projectcreate">
+            Open <span data-icon="external"></span>
+          </button>
+        </li>
+        <li>
+          <div class="step-text">
+            <strong>Enable the Gmail API</strong>
+            <span>Make sure your new project is selected, then click Enable.</span>
+          </div>
+          <button class="btn btn-small" type="button" data-url="https://console.cloud.google.com/apis/library/gmail.googleapis.com">
+            Open <span data-icon="external"></span>
+          </button>
+        </li>
+        <li>
+          <div class="step-text">
+            <strong>Set up the consent screen</strong>
+            <span>In “Google Auth Platform”, choose <em>External</em> and fill in an app name and your email.
+              Under <em>Audience</em>, add your Gmail address(es) as Test users.
+              Leave <em>Data Access</em> empty: Roost asks for Gmail access when you sign in.</span>
+          </div>
+          <button class="btn btn-small" type="button" data-url="https://console.cloud.google.com/auth/overview">
+            Open <span data-icon="external"></span>
+          </button>
+        </li>
+        <li>
+          <div class="step-text">
+            <strong>Create credentials</strong>
+            <span>Click <em>Create client</em>, choose Application type <em>Desktop app</em>,
+              then copy the Client ID and Client secret.</span>
+          </div>
+          <button class="btn btn-small" type="button" data-url="https://console.cloud.google.com/auth/clients">
+            Open <span data-icon="external"></span>
+          </button>
+        </li>
+      </ol>
+
+      <form id="setup-form" class="setup-form" novalidate>
+        <label class="field">
+          <span class="field-label">Client ID</span>
+          <input id="setup-client-id" type="text" autocomplete="off" spellcheck="false"
+                 placeholder="1234567890-abc.apps.googleusercontent.com">
+        </label>
+        <label class="field">
+          <span class="field-label">Client secret</span>
+          <input id="setup-client-secret" type="password" autocomplete="off" spellcheck="false"
+                 placeholder="GOCSPX-…">
+        </label>
+        <p id="setup-error" class="form-error" role="alert" hidden></p>
+        <div class="form-actions">
+          <button id="setup-cancel" class="btn btn-ghost" type="button" hidden>Cancel</button>
+          <button id="setup-save" class="btn btn-primary" type="submit">Save and continue</button>
+        </div>
+        <p class="note">
+          One key works for all your Gmail accounts. While the app is in Testing mode
+          Google asks you to sign in again every 7 days.
+        </p>
+      </form>
+    </div>
+  </section>
+
+  <!-- 2. Sign in -->
+  <section id="screen-signin" class="screen center-screen" hidden>
+    <div class="signin-card">
+      <div class="brand-mark" aria-hidden="true"><span data-icon="mail"></span></div>
+      <h1>Sign in to Gmail</h1>
+      <div id="signin-idle">
+        <p class="lead">Your browser opens so you can sign in with Google. Then come back here.</p>
+        <button id="signin-btn" class="btn btn-primary btn-large" type="button">Sign in with Google</button>
+      </div>
+      <div id="signin-waiting" hidden>
+        <div class="spinner" aria-hidden="true"></div>
+        <p class="lead" role="status">Finish signing in in your browser…</p>
+        <p class="signin-tip">If Google says <b>“Access blocked … has not completed the Google verification process”</b>,
+          add this Gmail address under <b>Test users</b> in your Google Cloud project, then try again.
+          If Google says <b>“Google hasn’t verified this app”</b>, that is normal for your own key: click <b>Continue</b> (or <b>Advanced</b> → <b>Go to … (unsafe)</b>, then <b>Continue</b>). Tick every permission box.</p>
+        <button id="signin-test-users" class="btn" type="button">Open Test users</button>
+        <button id="signin-cancel" class="btn" type="button">Cancel</button>
+      </div>
+      <p id="signin-error" class="form-error" role="alert" hidden></p>
+      <button id="signin-change-key" class="link-btn" type="button">Change Google key</button>
+    </div>
+  </section>
+
+  <!-- 3. Mail -->
+  <section id="screen-mail" class="screen mail" hidden>
+    <aside id="col-labels" class="col-labels" aria-label="Mailboxes">
+      <div class="account" id="account-email" title=""></div>
+      <button id="compose-btn" class="btn btn-primary compose-btn" type="button">
+        <span data-icon="compose"></span> Compose
+      </button>
+      <nav class="label-list" id="label-list" aria-label="Labels"></nav>
+      <button id="signout-btn" class="signout-btn" type="button">
+        <span data-icon="signout"></span> Sign out
+      </button>
+    </aside>
+    <div id="drawer-backdrop" class="drawer-backdrop" hidden></div>
+
+    <section id="col-list" class="col-list" aria-label="Conversations">
+      <header class="list-header">
+        <div class="list-toolbar">
+          <button id="menu-btn" class="icon-btn menu-btn" type="button" aria-label="Show labels" title="Labels">
+            <span data-icon="menu"></span>
+          </button>
+          <form id="search-form" class="search" role="search">
+            <span data-icon="search" class="search-icon"></span>
+            <input id="search-input" type="search" placeholder="Search mail" aria-label="Search mail" autocomplete="off" spellcheck="false">
+          </form>
+          <button id="refresh-btn" class="icon-btn" type="button" aria-label="Refresh" title="Refresh">
+            <span data-icon="refresh"></span>
+          </button>
+        </div>
+        <div class="list-title-row">
+          <h2 id="list-title" class="list-title">Inbox</h2>
+          <span id="list-sub" class="list-sub muted"></span>
+        </div>
+        <nav id="cat-tabs" class="cat-tabs" aria-label="Inbox tabs" hidden></nav>
+      </header>
+      <div id="thread-list" class="thread-list" role="list"></div>
+    </section>
+
+    <section id="col-reader" class="col-reader" aria-label="Conversation">
+      <div id="reader" class="reader"></div>
+
+      <div id="compose" class="compose" hidden role="dialog" aria-modal="false" aria-labelledby="compose-title">
+        <header class="compose-header">
+          <h2 id="compose-title">New message</h2>
+          <button id="compose-close" class="icon-btn" type="button" aria-label="Discard draft" title="Discard">
+            <span data-icon="x"></span>
+          </button>
+        </header>
+        <form id="compose-form" class="compose-form" novalidate>
+          <div class="compose-row">
+            <label for="compose-to">To</label>
+            <input id="compose-to" type="text" autocomplete="off" spellcheck="false">
+            <button id="compose-ccbcc" class="link-btn small" type="button">Cc/Bcc</button>
+          </div>
+          <div class="compose-row" id="compose-cc-row" hidden>
+            <label for="compose-cc">Cc</label>
+            <input id="compose-cc" type="text" autocomplete="off" spellcheck="false">
+          </div>
+          <div class="compose-row" id="compose-bcc-row" hidden>
+            <label for="compose-bcc">Bcc</label>
+            <input id="compose-bcc" type="text" autocomplete="off" spellcheck="false">
+          </div>
+          <div class="compose-row">
+            <label for="compose-subject">Subject</label>
+            <input id="compose-subject" type="text" autocomplete="off">
+          </div>
+          <textarea id="compose-body" class="compose-body" aria-label="Message body"></textarea>
+          <div id="compose-attachments" class="chips"></div>
+          <p id="compose-error" class="form-error" role="alert" hidden></p>
+          <footer class="compose-footer">
+            <button id="compose-send" class="btn btn-primary" type="submit">
+              <span data-icon="send"></span> Send
+            </button>
+            <button id="compose-attach" class="icon-btn" type="button" aria-label="Attach files" title="Attach files">
+              <span data-icon="clip"></span>
+            </button>
+            <button id="compose-ai" class="btn btn-small ai-btn" type="button" aria-haspopup="dialog" aria-expanded="false" aria-controls="ai-panel" title="AI writing tools">
+              <span data-icon="sparkle"></span><span id="compose-ai-label">Help me write</span>
+            </button>
+            <button id="compose-gmail" class="icon-btn" type="button" aria-label="Open in Gmail" title="Open in Gmail (Google's Gemini “Help me write” is there)">
+              <span data-icon="external"></span>
+            </button>
+            <span class="spacer"></span>
+            <button id="compose-discard" class="btn btn-ghost" type="button">Discard</button>
+          </footer>
+        </form>
+        <div id="ai-panel" class="ai-panel" hidden role="dialog" aria-label="AI writing"></div>
+      </div>
+    </section>
+  </section>
+
+  <div id="toasts" class="toasts" aria-live="polite"></div>
+
+  <script src="gmail.js"></script>
+</body>
+</html>

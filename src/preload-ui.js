@@ -1,0 +1,25 @@
+const { contextBridge, ipcRenderer } = require('electron');
+
+contextBridge.exposeInMainWorld('roost', {
+  getState: () => ipcRenderer.invoke('ui:get-state'),
+  add: (data) => ipcRenderer.invoke('ui:add', data),
+  update: (data) => ipcRenderer.invoke('ui:update', data),
+  select: (id) => ipcRenderer.send('ui:select', id),
+  context: (id) => ipcRenderer.send('ui:context', id),
+  reorder: (ids, moved) => ipcRenderer.send('ui:reorder', ids, moved || null),
+  setSettings: (patch) => ipcRenderer.invoke('ui:set-settings', patch),
+  setApp: (data) => ipcRenderer.invoke('ui:set-app', data),
+  setAiKey: (key) => ipcRenderer.invoke('ui:set-ai-key', key),
+  openUrl: (url) => ipcRenderer.send('ui:open-url', url),
+  onSettings: (cb) => ipcRenderer.on('ui:settings', (_e, section) => cb(section)),
+  overlay: (on) => ipcRenderer.send('ui:overlay', on),
+  toggleDnd: () => ipcRenderer.send('ui:toggle-dnd'),
+  onState: (cb) => ipcRenderer.on('state', (_e, s) => cb(s)),
+  onEdit: (cb) => ipcRenderer.on('ui:edit', (_e, id) => cb(id)),
+  onAdd: (cb) => ipcRenderer.on('ui:add', () => cb()),
+  searchAll: (q) => ipcRenderer.invoke('ui:search-all', String(q || '')),
+  openMail: (id, threadId) => ipcRenderer.send('ui:open-mail', id, threadId),
+  onSearch: (cb) => ipcRenderer.on('ui:search', () => cb()),
+  onShortcuts: (cb) => ipcRenderer.on('ui:shortcuts', () => cb()),
+  platform: process.platform,
+});
