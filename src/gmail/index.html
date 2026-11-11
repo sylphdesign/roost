@@ -15,80 +15,96 @@
     <button id="loading-retry" class="btn" type="button" hidden>Try again</button>
   </section>
 
-  <!-- 1. Setup -->
+  <!-- 1. Setup: a short wizard. One step open at a time, progress on top, key file drop at the end. -->
   <section id="screen-setup" class="screen scroll-screen" hidden>
     <div class="setup-card">
       <div class="brand-mark" aria-hidden="true"><span data-icon="mail"></span></div>
       <h1>Connect Gmail</h1>
       <p class="lead">
-        Google blocks its normal sign-in inside desktop apps, so Roost uses Google's official
-        Gmail connection instead. You create your own free key once. It takes about 10 minutes,
-        and nobody else sees your mail.
+        Google blocks its normal sign-in inside desktop apps, so you make your own free Google key once.
+        We walk you through it. Nobody else sees your mail.
       </p>
 
-      <ol class="steps">
-        <li>
-          <div class="step-text">
-            <strong>Create a project</strong>
-            <span>Open Google Cloud Console and create a new project (any name).</span>
+      <div class="wiz-progress" aria-live="polite">
+        <div class="wiz-progress-text"><span id="wiz-count">Step 1 of 4</span><span id="wiz-left">about 10 min left</span></div>
+        <div class="wiz-track" aria-hidden="true"><span id="wiz-bar"></span></div>
+      </div>
+
+      <ol class="wiz-steps">
+        <li class="wiz-step" data-step="1">
+          <button class="wiz-head" type="button" data-wiz-go="1"><span class="wiz-dot">1</span><strong>Create a project</strong></button>
+          <div class="wiz-body">
+            <p>Open Google Cloud Console and create a new project. Any name works, for example <em>Roost</em>.</p>
+            <div class="wiz-actions">
+              <button class="btn btn-primary" type="button" data-url="https://console.cloud.google.com/projectcreate">Open Google Cloud <span data-icon="external"></span></button>
+              <button class="btn" type="button" data-wiz-next>I did this</button>
+            </div>
           </div>
-          <button class="btn btn-small" type="button" data-url="https://console.cloud.google.com/projectcreate">
-            Open <span data-icon="external"></span>
-          </button>
         </li>
-        <li>
-          <div class="step-text">
-            <strong>Enable the Gmail API</strong>
-            <span>Make sure your new project is selected, then click Enable.</span>
+        <li class="wiz-step" data-step="2">
+          <button class="wiz-head" type="button" data-wiz-go="2"><span class="wiz-dot">2</span><strong>Turn on the Gmail API</strong></button>
+          <div class="wiz-body">
+            <p>Check that your new project is selected at the top of the page, then click <em>Enable</em>.</p>
+            <div class="wiz-actions">
+              <button class="btn btn-primary" type="button" data-url="https://console.cloud.google.com/apis/library/gmail.googleapis.com">Open the Gmail API page <span data-icon="external"></span></button>
+              <button class="btn" type="button" data-wiz-next>I did this</button>
+            </div>
           </div>
-          <button class="btn btn-small" type="button" data-url="https://console.cloud.google.com/apis/library/gmail.googleapis.com">
-            Open <span data-icon="external"></span>
-          </button>
         </li>
-        <li>
-          <div class="step-text">
-            <strong>Set up the consent screen</strong>
-            <span>In “Google Auth Platform”, choose <em>External</em> and fill in an app name and your email.
-              Under <em>Audience</em>, add your Gmail address(es) as Test users.
-              Leave <em>Data Access</em> empty: Roost asks for Gmail access when you sign in.</span>
+        <li class="wiz-step" data-step="3">
+          <button class="wiz-head" type="button" data-wiz-go="3"><span class="wiz-dot">3</span><strong>Add yourself as a test user</strong></button>
+          <div class="wiz-body">
+            <p>In <em>Google Auth Platform</em>, choose <em>External</em>, then type an app name and your email.
+              Under <em>Audience</em>, add each Gmail address you will use in Roost as a <em>Test user</em>.
+              Leave <em>Data Access</em> empty: Roost asks for Gmail access when you sign in.</p>
+            <div class="wiz-actions">
+              <button class="btn btn-primary" type="button" data-url="https://console.cloud.google.com/auth/overview">Open Google Auth Platform <span data-icon="external"></span></button>
+              <button class="btn" type="button" data-wiz-next>I did this</button>
+            </div>
           </div>
-          <button class="btn btn-small" type="button" data-url="https://console.cloud.google.com/auth/overview">
-            Open <span data-icon="external"></span>
-          </button>
         </li>
-        <li>
-          <div class="step-text">
-            <strong>Create credentials</strong>
-            <span>Click <em>Create client</em>, choose Application type <em>Desktop app</em>,
-              then copy the Client ID and Client secret.</span>
+        <li class="wiz-step" data-step="4">
+          <button class="wiz-head" type="button" data-wiz-go="4"><span class="wiz-dot">4</span><strong>Create the key and bring it here</strong></button>
+          <div class="wiz-body">
+            <p>Click <em>Create client</em>, choose Application type <em>Desktop app</em>, then click <em>Create</em>.
+              In the box that opens, click <em>Download JSON</em>.</p>
+            <div class="wiz-actions">
+              <button class="btn" type="button" data-url="https://console.cloud.google.com/auth/clients">Open Clients <span data-icon="external"></span></button>
+            </div>
+
+            <form id="setup-form" class="setup-form" novalidate>
+              <label id="setup-drop" class="drop-zone" for="setup-file">
+                <span data-icon="download"></span>
+                <span><b>Drop the downloaded <code>client_secret_….json</code> file here</b><br>
+                  <span class="drop-sub">or click to choose it. You can also paste the two values below.</span></span>
+                <input id="setup-file" type="file" accept=".json,application/json" hidden>
+              </label>
+              <p id="setup-file-msg" class="field-msg" role="status" hidden></p>
+              <label class="field">
+                <span class="field-label">Client ID</span>
+                <input id="setup-client-id" type="text" autocomplete="off" spellcheck="false"
+                       placeholder="1234567890-abc.apps.googleusercontent.com" aria-describedby="setup-id-msg">
+                <span id="setup-id-msg" class="field-msg" hidden></span>
+              </label>
+              <label class="field">
+                <span class="field-label">Client secret</span>
+                <input id="setup-client-secret" type="password" autocomplete="off" spellcheck="false"
+                       placeholder="GOCSPX-…" aria-describedby="setup-secret-msg">
+                <span id="setup-secret-msg" class="field-msg" hidden></span>
+              </label>
+              <p id="setup-error" class="form-error" role="alert" hidden></p>
+              <div class="form-actions">
+                <button id="setup-cancel" class="btn btn-ghost" type="button" hidden>Cancel</button>
+                <button id="setup-save" class="btn btn-primary" type="submit">Save and continue</button>
+              </div>
+              <p class="note">
+                One key works for all your Gmail accounts. While the app is in Testing mode
+                Google asks you to sign in again every 7 days.
+              </p>
+            </form>
           </div>
-          <button class="btn btn-small" type="button" data-url="https://console.cloud.google.com/auth/clients">
-            Open <span data-icon="external"></span>
-          </button>
         </li>
       </ol>
-
-      <form id="setup-form" class="setup-form" novalidate>
-        <label class="field">
-          <span class="field-label">Client ID</span>
-          <input id="setup-client-id" type="text" autocomplete="off" spellcheck="false"
-                 placeholder="1234567890-abc.apps.googleusercontent.com">
-        </label>
-        <label class="field">
-          <span class="field-label">Client secret</span>
-          <input id="setup-client-secret" type="password" autocomplete="off" spellcheck="false"
-                 placeholder="GOCSPX-…">
-        </label>
-        <p id="setup-error" class="form-error" role="alert" hidden></p>
-        <div class="form-actions">
-          <button id="setup-cancel" class="btn btn-ghost" type="button" hidden>Cancel</button>
-          <button id="setup-save" class="btn btn-primary" type="submit">Save and continue</button>
-        </div>
-        <p class="note">
-          One key works for all your Gmail accounts. While the app is in Testing mode
-          Google asks you to sign in again every 7 days.
-        </p>
-      </form>
     </div>
   </section>
 
@@ -99,6 +115,19 @@
       <h1>Sign in to Gmail</h1>
       <div id="signin-idle">
         <p class="lead">Your browser opens so you can sign in with Google. Then come back here.</p>
+        <div class="heads-up">
+          <div class="fake-google" aria-hidden="true">
+            <b>Google hasn’t verified this app</b>
+            <span>The app is requesting access to sensitive info in your Google Account…</span>
+            <span class="fake-links"><u>Advanced</u> · <u>Go to Roost (unsafe)</u></span>
+          </div>
+          <div class="heads-up-text">
+            <strong>Coming up: you will see this page.</strong>
+            <span>It is normal. It is your own key, so Google has not checked it.
+              Click <b>Advanced</b>, then <b>Go to … (unsafe)</b>, then <b>Continue</b>, and tick every box.
+              Your mail stays between your Mac and Google.</span>
+          </div>
+        </div>
         <button id="signin-btn" class="btn btn-primary btn-large" type="button">Sign in with Google</button>
       </div>
       <div id="signin-waiting" hidden>
@@ -130,6 +159,13 @@
     <div id="drawer-backdrop" class="drawer-backdrop" hidden></div>
 
     <section id="col-list" class="col-list" aria-label="Conversations">
+      <div id="reauth-banner" class="reauth-banner" role="status" hidden>
+        <p id="reauth-text"></p>
+        <div class="reauth-actions">
+          <button id="reauth-now" class="btn btn-primary btn-small" type="button">Sign in now</button>
+          <button id="reauth-later" class="btn btn-small" type="button">Later</button>
+        </div>
+      </div>
       <header class="list-header">
         <div class="list-toolbar">
           <button id="menu-btn" class="icon-btn menu-btn" type="button" aria-label="Show labels" title="Labels">
@@ -147,7 +183,10 @@
           <h2 id="list-title" class="list-title">Inbox</h2>
           <span id="list-sub" class="list-sub muted"></span>
         </div>
-        <nav id="cat-tabs" class="cat-tabs" aria-label="Inbox tabs" hidden></nav>
+        <div id="cat-wrap" class="cat-wrap">
+          <nav id="cat-tabs" class="cat-tabs" aria-label="Inbox tabs" hidden></nav>
+          <button id="cat-more" class="cat-more" type="button" aria-label="More tabs" title="More tabs" hidden>›</button>
+        </div>
       </header>
       <div id="thread-list" class="thread-list" role="list"></div>
     </section>

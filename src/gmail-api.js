@@ -227,11 +227,15 @@ class GmailStore {
   getAccount(serviceId) {
     const a = this.data.accounts[serviceId];
     if (!a) return null;
-    return { email: a.email, refreshToken: this.dec(a.refresh) };
+    return { email: a.email, refreshToken: this.dec(a.refresh), signedInAt: Number(a.at) || null };
   }
 
-  setAccount(serviceId, { email, refreshToken }) {
-    this.data.accounts[serviceId] = { email, refresh: this.enc(refreshToken) };
+  // signedInAt: when Google gave this refresh token. With a key in Testing mode, Google ends it after 7 days.
+  setAccount(serviceId, { email, refreshToken, signedInAt }) {
+    const prev = this.data.accounts[serviceId];
+    const same = prev && refreshToken && this.dec(prev.refresh) === refreshToken;
+    const at = refreshToken ? (Number(signedInAt) || (same ? Number(prev.at) || null : Date.now())) : null;
+    this.data.accounts[serviceId] = { email, refresh: this.enc(refreshToken), ...(at ? { at } : {}) };
     this.save();
   }
 
@@ -266,7 +270,7 @@ class GoogleAccount extends EventEmitter {
     const acc = this.account();
     return {
       configured: !!client, signedIn: !!(client && acc && acc.refreshToken), email: acc ? acc.email : null,
-      expectEmail: this.expectEmail || null,
+      expectEmail: this.expectEmail || null, signedInAt: (acc && acc.refreshToken && acc.signedInAt) || null,
     };
   }
 
@@ -320,14 +324,18 @@ display:grid;place-items:center;height:90vh;background:#15151c;color:#ececf1"><d
       client_id: client.id, client_secret: client.secret,
     });
     if (!tokens.refresh_token) throw new ApiError('Google did not give a long-term key. Please try again.');
+    // Keep the new key in memory until the email check passes, so a failed sign-in again
+    // (for example from the "Sign in now" banner) does not end a session that still works.
+    const prevAccess = this.access;
+    const hadAccount = !!(this.account() && this.account().refreshToken);
+    const giveUp = () => { this.access = prevAccess; if (!hadAccount) this.store.removeAccount(this.serviceId); };
     this.access = { token: tokens.access_token, expires: Date.now() + (tokens.expires_in - 60) * 1000 };
-    this.store.setAccount(this.serviceId, { email: '', refreshToken: tokens.refresh_token });
-    const email = await this.fetchEmail().catch((err) => { this.store.removeAccount(this.serviceId); throw err; });
+    if (!hadAccount) this.store.setAccount(this.serviceId, { email: '', refreshToken: tokens.refresh_token });
+    const email = await this.fetchEmail().catch((err) => { giveUp(); throw err; });
     if (this.expectEmail && String(email).toLowerCase() !== this.expectEmail) {
-      // The user picked another Google account. This tile belongs to expectEmail: drop the key.
+      // The user picked another Google account. This tile belongs to expectEmail: drop the new key.
       // (No revoke: revoking would also end that account's other sign-ins in Roost.)
-      this.access = null;
-      this.store.removeAccount(this.serviceId);
+      giveUp();
       throw new ApiError(`You signed in as ${email}. Please sign in as ${this.expectEmail}.`);
     }
     this.store.setAccount(this.serviceId, { email, refreshToken: tokens.refresh_token });
@@ -426,10 +434,12 @@ display:grid;place-items:center;height:90vh;background:#15151c;color:#ececf1"><d
 
   stopPolling() {}
 
-  setUnread(n) {
-    if (n === this.unread) return;
+  // n = all unread inbox threads; primary = unread threads in the Primary tab (the ones from people).
+  setUnread(n, primary = n) {
+    if (n === this.unread && primary === this.unreadPrimary) return;
     this.unread = n;
-    this.emit('unread', n);
+    this.unreadPrimary = primary;
+    this.emit('unread', n, primary);
   }
 
   dispose() { this.stopPolling(); this.cancelSignIn(); this.removeAllListeners(); }
@@ -456,7 +466,7 @@ class GmailAccount extends GoogleAccount {
     const wanted = labels.filter((l) => l.type === 'user' || ['INBOX', 'STARRED', 'SENT', 'DRAFT', 'SPAM', 'TRASH'].includes(l.id));
     const full = await mapLimit(wanted, 6, (l) => this.api('GET', `/gmail/v1/users/me/labels/${encodeURIComponent(l.id)}`).catch(() => l));
     const inbox = full.find((l) => l.id === 'INBOX');
-    if (inbox) this.setUnread(inbox.threadsUnread || 0);
+    if (inbox && (inbox.threadsUnread || 0) !== this.unread) this.refreshUnread(); // also works out the Primary count
     return {
       labels: full.map((l) => ({
         id: l.id, name: l.name, type: l.type === 'user' ? 'user' : 'system', threadsUnread: l.threadsUnread || 0, threadsTotal: l.threadsTotal || 0,
@@ -540,6 +550,25 @@ class GmailAccount extends GoogleAccount {
     return {};
   }
 
+  // Undo for Delete: take the thread out of Trash and give back the labels it lost (for example INBOX).
+  async untrashThread({ id, add = [] }) {
+    await this.api('POST', `/gmail/v1/users/me/threads/${encodeURIComponent(id)}/untrash`);
+    const labels = (Array.isArray(add) ? add : []).filter((l) => typeof l === 'string' && l && l !== 'TRASH');
+    if (labels.length) {
+      const modify = () => this.api('POST', `/gmail/v1/users/me/threads/${encodeURIComponent(id)}/modify`, { body: { addLabelIds: labels, removeLabelIds: [] } });
+      try {
+        await modify();
+      } catch {
+        try { await modify(); } catch {
+          this.refreshUnread();
+          throw new ApiError('The email left the Trash, but could not go back to your Inbox. Find it in All Mail.');
+        }
+      }
+    }
+    this.refreshUnread();
+    return {};
+  }
+
   async send({ to, cc, bcc, subject, body, html, threadId, inReplyTo, references, attachments = [] }) {
     if (!String(to || '').trim() && !String(cc || '').trim() && !String(bcc || '').trim()) throw new ApiError('Add at least one recipient.');
     const acc = this.account();
@@ -608,10 +637,37 @@ class GmailAccount extends GoogleAccount {
 
   // ----- unread count + new mail -----
 
-  async refreshUnread() {
+  // Many changes in a row (archive 40 emails) ask for one count, not 40: one call runs at a time,
+  // and one more runs after it if anything changed meanwhile.
+  refreshUnread() {
+    if (this.unreadRun) { this.unreadAgain = true; return this.unreadRun; }
+    this.unreadRun = (async () => {
+      try {
+        do {
+          this.unreadAgain = false;
+          await this.countUnread();
+        } while (this.unreadAgain);
+      } finally {
+        this.unreadRun = null;
+      }
+    })();
+    return this.unreadRun;
+  }
+
+  async countUnread() {
     try {
       const inbox = await this.api('GET', '/gmail/v1/users/me/labels/INBOX');
-      this.setUnread(inbox.threadsUnread || 0);
+      const total = inbox.threadsUnread || 0;
+      // If the Primary count fails, keep the last one (never more than the total), so all mail does not turn red.
+      let primary = Math.min(total, this.unreadPrimary ?? total);
+      if (total) {
+        // Same rule as the Primary tab: inbox mail that is not in the other tabs (works when tabs are off too).
+        const list = await this.api('GET', '/gmail/v1/users/me/threads', {
+          query: { labelIds: ['INBOX'], maxResults: 100, q: PRIMARY_UNREAD_Q },
+        }).catch(() => null);
+        if (list) primary = Math.min(total, list.nextPageToken ? 100 : (list.threads || []).length);
+      } else primary = 0;
+      this.setUnread(total, primary);
     } catch { /* offline or signed out */ }
   }
 
@@ -695,8 +751,10 @@ function decodeHtmlEntities(s) {
   });
 }
 
+const PRIMARY_UNREAD_Q = 'is:unread -category:promotions -category:social -category:updates -category:forums';
+
 const CONTRACT = ['getStatus', 'saveClientConfig', 'signIn', 'signOut', 'listLabels', 'listThreads', 'getThread',
-  'modifyThread', 'trashThread', 'send', 'listContacts', 'pickAttachments', 'downloadAttachment', 'openExternal'];
+  'modifyThread', 'trashThread', 'untrashThread', 'send', 'listContacts', 'pickAttachments', 'downloadAttachment', 'openExternal'];
 
 module.exports = {
   GoogleAccount, GmailAccount, GmailStore, ApiError, CONTRACT, ENDPOINTS, mapLimit,

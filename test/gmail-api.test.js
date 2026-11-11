@@ -127,3 +127,91 @@ test('non-ASCII display names in To are RFC 2047 encoded', () => {
   const raw = buildRawMessage({ from: 'me@x.com', to: 'Zoë Ann <z@x.com>, b@x.com', subject: 's', body: 'b' });
   assert.match(raw, /\r\nTo: =\?UTF-8\?B\?[^?]+\?= <z@x.com>, b@x.com\r\n/);
 });
+
+test('untrashThread takes a thread out of Trash and puts INBOX back', async () => {
+  const { GmailAccount } = require('../src/gmail-api');
+  const seen = [];
+  const self = { api: async (m, p, opts = {}) => { seen.push([m, p, opts.body || null]); return {}; }, refreshUnread: () => seen.push(['refresh']) };
+  await GmailAccount.prototype.untrashThread.call(self, { id: 't/1', add: ['INBOX', 'TRASH', ''] });
+  assert.deepStrictEqual(seen, [
+    ['POST', '/gmail/v1/users/me/threads/t%2F1/untrash', null],
+    ['POST', '/gmail/v1/users/me/threads/t%2F1/modify', { addLabelIds: ['INBOX'], removeLabelIds: [] }],
+    ['refresh'],
+  ]);
+  seen.length = 0;
+  await GmailAccount.prototype.untrashThread.call(self, { id: 'x' });
+  assert.deepStrictEqual(seen.map((s) => s[1]), ['/gmail/v1/users/me/threads/x/untrash', undefined]);
+});
+
+test('refreshUnread reports the total and the Primary-tab count', async () => {
+  const { GmailAccount, CONTRACT } = require('../src/gmail-api');
+  assert.ok(CONTRACT.includes('untrashThread'));
+  const run = async (inboxUnread, list) => {
+    const got = [];
+    const self = {
+      setUnread: (n, p) => got.push([n, p]),
+      api: async (_m, p, opts = {}) => {
+        if (p.endsWith('/labels/INBOX')) return { threadsUnread: inboxUnread };
+        assert.match(opts.query.q, /is:unread -category:promotions/);
+        if (list instanceof Error) throw list;
+        return list;
+      },
+    };
+    await GmailAccount.prototype.countUnread.call(self);
+    return got[0];
+  };
+  assert.deepStrictEqual(await run(9, { threads: [{ id: 'a' }, { id: 'b' }] }), [9, 2]);
+  assert.deepStrictEqual(await run(0, null), [0, 0], 'no extra call when nothing is unread');
+  assert.deepStrictEqual(await run(150, { threads: [], nextPageToken: 'n' }), [150, 100]);
+  assert.deepStrictEqual(await run(4, new Error('offline')), [4, 4], 'falls back to the total');
+});
+
+test('a failed Primary count keeps the last one, and many refreshes run as few calls', async () => {
+  const { GmailAccount } = require('../src/gmail-api');
+  const got = [];
+  let calls = 0;
+  let failList = true;
+  const self = {
+    unreadPrimary: 2,
+    setUnread: (n, p) => { got.push([n, p]); self.unreadPrimary = p; },
+    countUnread: GmailAccount.prototype.countUnread,
+    api: async (_m, p) => {
+      calls++;
+      await new Promise((r) => setTimeout(r, 5));
+      if (p.endsWith('/labels/INBOX')) return { threadsUnread: 9 };
+      if (failList) throw new Error('429');
+      return { threads: [{ id: 'a' }] };
+    },
+  };
+  await GmailAccount.prototype.countUnread.call(self);
+  assert.deepStrictEqual(got.pop(), [9, 2], 'kept the last Primary count');
+  failList = false;
+  calls = 0;
+  const runs = [];
+  for (let i = 0; i < 10; i++) runs.push(GmailAccount.prototype.refreshUnread.call(self));
+  await Promise.all(runs);
+  assert.ok(calls <= 4, `10 refreshes made ${calls} calls`);
+  assert.deepStrictEqual(got.pop(), [9, 1]);
+});
+
+test('GmailStore remembers when each account signed in', () => {
+  const fs = require('fs');
+  const os = require('os');
+  const path = require('path');
+  const { GmailStore } = require('../src/gmail-api');
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'roost-store-'));
+  const store = new GmailStore(path.join(dir, 'a.json'), null);
+  const before = Date.now();
+  store.setAccount('k', { email: 'a@x.com', refreshToken: 'r1' });
+  const first = store.getAccount('k').signedInAt;
+  assert.ok(first >= before, 'new token gets a time');
+  store.setAccount('k', { email: 'a@x.com', refreshToken: 'r1' });
+  assert.strictEqual(store.getAccount('k').signedInAt, first, 'same token keeps its time');
+  store.setAccount('k', { email: 'a@x.com', refreshToken: 'r1', signedInAt: 123 });
+  assert.strictEqual(store.getAccount('k').signedInAt, 123, 'a copied account keeps the given time');
+  store.setAccount('k', { email: 'a@x.com', refreshToken: '' });
+  assert.strictEqual(store.getAccount('k').signedInAt, null, 'signed out: no time');
+  const reread = new GmailStore(path.join(dir, 'a.json'), null);
+  assert.strictEqual(reread.getAccount('k').email, 'a@x.com');
+  fs.rmSync(dir, { recursive: true, force: true });
+});

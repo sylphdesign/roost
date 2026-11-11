@@ -38,10 +38,15 @@
   </footer>
 
   <main id="content">
-    <section id="welcome" hidden>
-      <h1>Welcome to Roost</h1>
-      <p>Put Gmail, WhatsApp, Slack, Telegram and Discord in one place.<br />Each account has its own private storage, so you can sign in to many accounts at once.</p>
-      <button id="welcome-add" class="primary">Add your first app</button>
+    <section id="welcome" hidden aria-labelledby="welcome-title">
+      <h1 id="welcome-title">Welcome to Roost</h1>
+      <p class="welcome-intro">Pick the apps you use. You can add more later. Each one stays signed in on its own.</p>
+      <div id="welcome-tiles" class="welcome-tiles" role="group" aria-label="Apps to add"></div>
+      <p id="welcome-error" class="error welcome-error" role="alert" hidden></p>
+      <div class="welcome-actions">
+        <button type="button" id="welcome-go" class="primary" disabled>Pick the apps you use</button>
+        <button type="button" id="welcome-more" class="ghost">Add another website…</button>
+      </div>
     </section>
   </main>
 
@@ -93,6 +98,14 @@
         <h2 id="s-title">Settings</h2>
         <button type="button" id="s-close" class="s-x" aria-label="Close">✕</button>
       </header>
+      <div class="s-main">
+      <nav id="s-nav" class="s-nav" aria-label="Settings sections">
+        <button type="button" class="s-nav-btn" data-sec="quiet" aria-controls="sec-quiet">Quiet time</button>
+        <button type="button" class="s-nav-btn" data-sec="mailview" aria-controls="sec-mailview">Email view</button>
+        <button type="button" class="s-nav-btn" data-sec="sound" aria-controls="sec-sound">Sounds</button>
+        <button type="button" class="s-nav-btn" data-sec="apps" aria-controls="sec-apps">Apps</button>
+        <button type="button" class="s-nav-btn" data-sec="ai" aria-controls="sec-ai">AI writing</button>
+      </nav>
       <div class="s-body">
         <section class="s-sec" id="sec-quiet">
           <h3>Quiet time</h3>
@@ -125,9 +138,11 @@
         </section>
 
         <section class="s-sec" id="sec-apps">
-          <h3>Each app</h3>
+          <h3>Apps</h3>
           <p class="s-note">Notifications: banners from this app. Sounds: its dings and ringtones. Badge: its count in the Dock and menu bar.</p>
+          <p id="s-apps-default" class="s-note s-apps-default" hidden>All apps use the default settings.</p>
           <div id="s-apps" class="apps"></div>
+          <label class="row s-apps-all"><span><b>Show all apps</b><small>Off: only apps you changed from the default (notifications, sounds and badge on).</small></span><input type="checkbox" id="s-apps-all" class="switch" /></label>
           <p id="s-chrome-note" class="s-note" hidden></p>
         </section>
 
@@ -143,9 +158,11 @@
           <p class="s-note"><button type="button" id="s-ai-get" class="linkish">Get a Claude API key</button> · Google's own Gemini tools work only in real Gmail: use “Open in Gmail” in the compose window.</p>
         </section>
       </div>
+      </div>
     </div>
   </dialog>
 
+  <script src="badge.js"></script>
   <script src="ui.js"></script>
 </body>
 </html>

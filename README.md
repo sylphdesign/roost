@@ -6,7 +6,7 @@ Roost is a macOS app that puts your email, calendar and chat apps in one window.
 
 > Name note: other software also uses the name "Roost". This project is unrelated to them.
 
-![Roost tour: inbox, select many, search all inboxes, calendar, full view, settings, shortcuts](docs/screenshots/tour.gif)
+![Roost tour: welcome, inbox, select many, search all inboxes, calendar, full view, settings, shortcuts, connect Gmail, all done](docs/screenshots/tour.gif)
 
 *All screenshots use made-up data from the test server. No real accounts.*
 
@@ -14,6 +14,8 @@ Roost is a macOS app that puts your email, calendar and chat apps in one window.
 
 | | |
 | --- | --- |
+| ![Welcome screen with app tiles](docs/screenshots/00-welcome.png) | ![Connect Gmail step by step](docs/screenshots/10-connect-gmail.png) |
+| **Welcome** — pick your apps, add them in one click | **Connect Gmail** — 4 steps, drop the key file |
 | ![Inbox with tabs and an open conversation](docs/screenshots/01-inbox.png) | ![Tick boxes to archive or delete many emails](docs/screenshots/02-select-many.png) |
 | **Inbox** — tabs, open conversation, top bar, shortcut bar | **Act on many** — tick emails, then archive or delete |
 | ![Search all inboxes at once](docs/screenshots/03-search-all-inboxes.png) | ![Google Calendar in the top bar](docs/screenshots/04-calendar.png) |
@@ -22,15 +24,19 @@ Roost is a macOS app that puts your email, calendar and chat apps in one window.
 | **Full view** — hide the list with ⤢ or `\` | **Settings › Email view** |
 | ![Keyboard shortcuts](docs/screenshots/07-keyboard-shortcuts.png) | ![Compose with the formatting bar and a Smart Compose suggestion](docs/screenshots/08-compose-smart-compose.png) |
 | **Keyboard shortcuts** (⌘/) | **Compose** — formatting bar, Smart Compose (Tab to accept) |
-| ![Recipient autofill in the To field](docs/screenshots/09-compose-autofill.png) | |
-| **Autofill** — pick people you write to | |
+| ![Recipient autofill in the To field](docs/screenshots/09-compose-autofill.png) | ![Sign in, with a preview of Google's warning page](docs/screenshots/11-sign-in-heads-up.png) |
+| **Autofill** — pick people you write to | **Sign in** — what Google will show, before it shows it |
+| ![All done in an empty inbox tab, with the next meetings](docs/screenshots/12-inbox-done.png) | |
+| **All done** — cleared today, and what is coming up | |
 
 To make them again: `npm run screenshots` (needs ffmpeg for the tour).
 
 ## What you get
 
 - **One window.** A left sidebar holds your email inboxes (top) and your messenger apps (bottom). A top bar holds Google Calendar, Keep, Drive and Docs.
-- **Gmail inside Roost.** Uses Google's official Gmail API. Inbox tabs (Primary, Promotions, Social, Updates, Forums), search, read, reply, reply all, forward, compose, archive, delete, star. Tick boxes to act on many emails at once.
+- **Easy start.** Pick your apps from tiles on the welcome screen. Connecting Gmail is a 4-step guide: drop the Google key file and Roost fills in the rest.
+- **Gmail inside Roost.** Uses Google's official Gmail API. Inbox tabs (Primary, Promotions, Social, Updates, Forums), search, read, reply, reply all, forward, compose, archive, delete (with Undo), star. Tick boxes to act on many emails at once.
+- **Calm badges.** Red numbers count mail in your Primary tab and chats from people. Other unread mail shows a gray number.
 - **A Gmail-style composer.** Rich text with the same formatting bar as Gmail: font, size, bold, italic, underline, text and background color, align, lists, indent, quote, strikethrough, remove formatting and links. Emails are sent as HTML plus a plain text copy. Recipient autofill suggests people from your own Sent and Inbox mail (no extra Google permission).
 - **Google Calendar inside Roost.** Uses Google's Calendar API.
 - **Many accounts.** Add Gmail, WhatsApp and the others more than once. Each one is separate.
