@@ -55,8 +55,31 @@ module.exports = async ({ win, getState, test, quit }) => {
   try {
     win.setContentSize(1440, 900);
     await wait(2500);
+
+    // 0. First run: the welcome screen (a separate launch with no apps yet)
+    if (process.env.ROOST_SHOTS_PHASE === 'welcome') {
+      await until(() => ui(`return !document.getElementById('welcome').hidden;`), 10000);
+      await ui(`for (const t of ['gmail', 'whatsapp', 'calendar']) { const b = document.querySelector('#welcome-tiles [data-type="' + t + '"]'); if (b) b.click(); } document.activeElement && document.activeElement.blur(); return true;`);
+      await shot('00-welcome');
+      quit();
+      return;
+    }
+
     const mail = ['mailpers', 'mailwork', 'mailside'];
+
+    // 10. Connect Gmail: the step-by-step guide, on the last step with a key filled in
+    await pick('mailpers');
+    await until(() => inView('mailpers', `return !document.getElementById('screen-setup').hidden;`), 15000);
+    await inView('mailpers', `for (let i = 0; i < 3; i++) document.querySelector('#screen-setup .wiz-step.now [data-wiz-next]').click();
+      const s = (i, v) => { const e = document.getElementById(i); e.value = v; e.dispatchEvent(new Event('input')); };
+      s('setup-client-id', '1234567890-abc.apps.googleusercontent.com'); s('setup-client-secret', 'GOCSPX-test'); return true;`);
+    await shot('10-connect-gmail');
+
     await inView(mail[0], `return window.gmail.call('saveClientConfig', { clientId: '123-abc.apps.googleusercontent.com', clientSecret: 'GOCSPX-test' })`);
+
+    // 11. Sign in: what Google's warning page looks like, shown before it appears
+    await until(() => inView('mailpers', `return !document.getElementById('screen-signin').hidden;`), 15000);
+    await shot('11-sign-in-heads-up');
     for (const id of mail) await inView(id, `return window.gmail.call('signIn')`);
     await pick('topcalen');
     await until(async () => !!(await gm('topcalen')?.executeJavaScript('!!window.gcal').catch(() => false)));
@@ -110,6 +133,18 @@ module.exports = async ({ win, getState, test, quit }) => {
     await wait(800);
     await shot('07-keyboard-shortcuts');
     await ui(`document.getElementById('keys-dlg').close(); return true;`);
+
+    // 12. "All done": an empty inbox tab, with the next meetings
+    await pick('mailpers');
+    await until(() => inView('mailpers', `return document.querySelectorAll('#thread-list .row').length > 5;`), 15000);
+    await inView('mailpers', `document.querySelector('.cat-tab[data-cat="forums"]').click(); return true;`);
+    await until(() => inView('mailpers', `return document.querySelectorAll('#thread-list .row').length >= 1 || !!document.querySelector('.inbox-done');`), 10000);
+    await inView('mailpers', `const r = document.querySelector('#thread-list .row .row-open'); if (r) r.click(); return true;`);
+    await wait(1000);
+    await inView('mailpers', `if (document.querySelector('#thread-list .row')) document.dispatchEvent(new KeyboardEvent('keydown', { key: 'e', bubbles: true })); return true;`);
+    await until(() => inView('mailpers', `return !!document.querySelector('.inbox-done .done-event');`), 10000);
+    await inView('mailpers', `document.querySelectorAll('#toasts .toast').forEach((t) => t.remove()); return true;`);
+    await shot('12-inbox-done');
   } catch (err) {
     console.log('screenshot run failed:', err && err.stack || err);
   }

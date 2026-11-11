@@ -43,11 +43,17 @@ const outDir = path.join(root, 'docs', 'screenshots');
     ROOST_GMAIL_API_BASE: fake.url, ROOST_CALENDAR_API_BASE: fake.url, ROOST_FAKE_URL: fake.url, ROOST_OAUTH_AUTO: '1', ROOST_PLAIN_TOKENS: '1',
     ROOST_E2E_SCRIPT: path.join(__dirname, 'screenshots-inapp.js'), ROOST_E2E_OUT: outDir,
   };
-  await new Promise((resolve) => {
-    const p = spawn(electron, [root], { env, stdio: 'inherit' });
+  const launch = (extra) => new Promise((resolve) => {
+    const p = spawn(electron, [root], { env: { ...env, ...extra }, stdio: 'inherit' });
     const t = setTimeout(() => p.kill(), 180000);
     p.on('exit', () => { clearTimeout(t); resolve(); });
   });
+  await launch({});
+  // First run (welcome screen): a fresh profile with no apps.
+  const ud0 = path.join(tmp, 'userdata-welcome');
+  fs.mkdirSync(ud0, { recursive: true });
+  fs.writeFileSync(path.join(ud0, 'config.json'), JSON.stringify({ bounds: { x: 60, y: 40, width: 1440, height: 900 }, services: [], settings: { keyBar: true } }));
+  await launch({ ROOST_USER_DATA: ud0, ROOST_SHOTS_PHASE: 'welcome' });
   await fake.close();
   const shots = fs.readdirSync(outDir).filter((f) => /^\d\d-.*\.png$/.test(f)).sort();
   console.log('screenshots:', shots.join(', ') || 'none');

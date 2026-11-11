@@ -44,7 +44,7 @@ let config = null;
 let overlay = false;
 let quitting = false;
 let tray = null;
-const views = new Map(); // service id -> { view, fromTitle, fromPage, unread, dot, icon, loading }
+const views = new Map(); // service id -> { view, fromTitle, fromPage, fromApi, unread, important, dot, icon, loading }
 const byWc = new Map(); // webContents id -> service id
 const readySessions = new Set();
 const accounts = new Map(); // service id -> ChromeAccount (Google accounts in their own Chrome window)
@@ -58,11 +58,13 @@ const API_APPS = {
 };
 const apiPage = (svc) => path.join(__dirname, API_APPS[svc.type].dir, 'index.html');
 const DEFAULT_MAIL_VIEW = { pane: 'right', listWidth: 'normal', density: 'comfortable', preview: true, labels: true };
-const DEFAULT_SETTINGS = { keyBar: true, sounds: true, callQuiet: true, quietHours: { on: false, from: '22:00', to: '07:00' } };
+const DEFAULT_SETTINGS = { keyBar: true, keyBarDoneSeen: false, sounds: true, callQuiet: true, quietHours: { on: false, from: '22:00', to: '07:00' } };
 let inCall = false; // a microphone is in use (Zoom, Meet, Teams, FaceTime, a WhatsApp call …)
 let zoomMeeting = false; // Zoom's meeting process is running
 const capturing = new Set(); // service ids whose page uses the microphone or camera right now
-const API_EXTRA = ['aiStatus', 'ai', 'openAiSettings', 'openInGmail', 'showShortcuts', 'searchAll', 'getView', 'openViewSettings']; // Gmail screen methods handled here
+const API_EXTRA = ['aiStatus', 'ai', 'openAiSettings', 'openInGmail', 'showShortcuts', 'searchAll', 'getView', 'openViewSettings', 'upcomingEvents', 'noteShortcut', 'openCalendar']; // Gmail screen methods handled here
+const LEARN_KEYS = new Set(['j', 'k', 'e', '#', 'r', 's', 'x', 'c', '/', '[', ']', 'u', 'F']); // keys the shortcut bar teaches
+const KEY_LEARNED_AT = 5;
 
 // ---------- helpers ----------
 
@@ -330,6 +332,7 @@ function publicState() {
     dnd: !!config.dnd,
     quiet: quietReason(),
     settings: settings(),
+    keysLearned: { ...(config.keysLearned || {}) },
     aiConfigured: aiConfigured(),
     chrome: chromePath ? browserName(chromePath) : null,
     topEmail: config.services.some(linksToMail) ? linkedEmail() || null : null,
@@ -338,7 +341,7 @@ function publicState() {
       return {
         id: s.id, type: s.type, name: s.name, url: s.url, color: s.color, muted: !!s.muted,
         group: groupOf(s), sounds: s.sounds !== false, badge: s.badge !== false, mode: s.mode || 'inside',
-        unread: e.unread || 0, dot: !!e.dot, loading: !!e.loading,
+        unread: e.unread || 0, important: e.important || 0, dot: !!e.dot, loading: !!e.loading,
         ...(() => {
           const mode = iconModeOf(s);
           if (mode === 'custom' && customIconUrl(s)) return { icon: customIconUrl(s), iconMode: 'custom' };
@@ -357,11 +360,15 @@ function pushState() {
 }
 
 // Unread = the higher of what the page title says and what the app's page recipe found.
+// Important = the part of it that needs a person (red badge, Dock, menu bar). For apps that use a
+// Google API, the API tells us (Gmail: the Primary tab); for all other apps, every unread item counts.
 function recomputeUnread(entry) {
   const count = Math.max(entry.fromTitle.count, entry.fromPage.count);
+  const important = entry.fromApi ? Math.min(entry.fromApi.important, count) : count;
   const dot = count === 0 && (entry.fromTitle.dot || entry.fromPage.dot);
-  if (count === entry.unread && dot === entry.dot) return false;
+  if (count === entry.unread && important === entry.important && dot === entry.dot) return false;
   entry.unread = count;
+  entry.important = important;
   entry.dot = dot;
   return true;
 }
@@ -373,7 +380,7 @@ function unreadTotals() {
     if (s.muted || s.badge === false) continue;
     const e = views.get(s.id);
     if (!e) continue;
-    total += e.unread;
+    total += e.important || 0; // only what needs a person; calm (gray) counts stay out of the Dock and menu bar
     anyDot = anyDot || e.dot;
   }
   return { total, anyDot };
@@ -500,8 +507,8 @@ function createView(svc) {
   const wc = view.webContents;
   wc.setUserAgent(CHROME_UA);
   const entry = {
-    view, fromTitle: { count: 0, dot: false }, fromPage: { count: 0, dot: false },
-    unread: 0, dot: false, icon: svc.mode === 'window' || svc.mode === 'api' ? presetOf(svc).icon || null : null, loading: true,
+    view, fromTitle: { count: 0, dot: false }, fromPage: { count: 0, dot: false }, fromApi: null,
+    unread: 0, important: 0, dot: false, icon: svc.mode === 'window' || svc.mode === 'api' ? presetOf(svc).icon || null : null, loading: true,
     windowOpen: false,
   };
   views.set(svc.id, entry);
@@ -575,7 +582,11 @@ function destroyView(id) {
 function layout() {
   if (!win || win.isDestroyed()) return;
   const [w, h] = win.getContentSize();
-  const bottom = settings().keyBar ? KEYBAR : 0;
+  // The shortcut bar steps back in an inbox once every inbox key is learned and its last line was shown.
+  const s = settings();
+  const act = svcById(config.activeId);
+  const inbox = !!act && act.type === 'gmail' && act.mode === 'api';
+  const bottom = s.keyBar && !(inbox && s.keyBarDoneSeen) ? KEYBAR : 0;
   const bounds = { x: SIDEBAR, y: TOPBAR, width: Math.max(0, w - SIDEBAR), height: Math.max(0, h - TOPBAR - bottom) };
   for (const e of views.values()) e.view.setBounds(bounds);
 }
@@ -765,7 +776,7 @@ async function stopAccount(idOrKey) {
 
 const gmailDeps = {
   openExternal: (url) => {
-    if (process.env.ROOST_OAUTH_AUTO) { fetch(url).catch(() => {}); return; } // tests: follow the sign-in redirect directly
+    if (process.env.ROOST_OAUTH_AUTO && !app.isPackaged) { fetch(url).catch(() => {}); return; } // tests: follow the sign-in redirect directly
     shell.openExternal(url);
   },
   showOpenDialog: async () => {
@@ -798,10 +809,12 @@ function startGmail(svc) {
   if (gmailAccounts.has(key)) return gmailAccounts.get(key);
   const acc = new API_APPS[svc.type].Account({ serviceId: key, store: gmailStore, deps: gmailDeps, expectEmail: emailOfKey(key) });
   gmailAccounts.set(key, acc);
-  acc.on('unread', (n) => {
+  // Gmail sends (all unread inbox threads, unread Primary threads). Calendar and older code send one number.
+  acc.on('unread', (n, primary) => {
     const entry = views.get(svc.id);
     if (!entry || !isCurrentKey(key)) return;
     entry.fromTitle = { count: n, dot: false };
+    entry.fromApi = { important: primary === undefined || primary === null ? n : primary };
     if (recomputeUnread(entry)) pushState();
   });
   acc.on('auth', (st) => {
@@ -875,6 +888,7 @@ async function setMode(svc, mode) {
   if (before === 'window' && svc.mode !== 'window') await stopAccount(svc.id);
   entry.fromTitle = { count: 0, dot: false };
   entry.fromPage = { count: 0, dot: false };
+  entry.fromApi = null;
   recomputeUnread(entry);
   if (svc.mode === 'window') {
     entry.icon = entry.icon || presetOf(svc).icon || null;
@@ -887,6 +901,7 @@ async function setMode(svc, mode) {
   } else {
     entry.view.webContents.loadURL(svc.url).catch(() => {});
   }
+  if (svc.id === config.activeId) layout(); // the shortcut bar space depends on the mode
   pushState();
 }
 
@@ -918,6 +933,7 @@ function select(id, { focus = true } = {}) {
     mailChanged();
   }
   showActive();
+  layout(); // the shortcut bar can differ between an inbox and other apps
   const e = views.get(id);
   if (focus && e && !overlay) e.view.webContents.focus();
   const svc = svcById(id);
@@ -1016,6 +1032,7 @@ async function removeService(id) {
     config.activeId = next ? next.id : null;
   }
   showActive();
+  layout();
   store.save(config);
   pushState();
 }
@@ -1073,6 +1090,11 @@ function setSettings(patch) {
     config.settings = next;
     layout();
     buildMenu();
+  }
+  if (typeof p.keyBarDoneSeen === 'boolean' && p.keyBarDoneSeen !== cur.keyBarDoneSeen) {
+    next.keyBarDoneSeen = p.keyBarDoneSeen;
+    config.settings = next;
+    layout();
   }
   if (p.quietHours && typeof p.quietHours === 'object') {
     const okTime = (t) => /^\d{1,2}:\d{2}$/.test(String(t));
@@ -1379,6 +1401,24 @@ ipcMain.on('svc:capture', (e, n) => {
   if (Number(n) > 0) capturing.add(id); else capturing.delete(id);
   applyAudio();
 });
+// The next few meetings for the "inbox done" screen. Uses a Google Calendar tile in Roost,
+// the one for the same Google account when there is one. No Calendar tile: no events.
+async function upcomingEventsFor(email) {
+  const cals = config.services.filter((s) => s.type === 'calendar' && s.mode === 'api');
+  if (!cals.length) return { events: [], hasCalendar: false };
+  // Only the Calendar of the same Google account: never show another account's meetings.
+  const want = String(email || '').toLowerCase();
+  const match = cals.map((s) => ({ s, acc: startGmail(s) }))
+    .find(({ acc }) => acc.status().signedIn && String(acc.status().email || '').toLowerCase() === want);
+  if (!match) return { events: [], hasCalendar: true, calendarId: cals[0].id };
+  const { acc } = match;
+  const now = Date.now();
+  const { events } = await acc.listEvents({ timeMin: new Date(now).toISOString(), timeMax: new Date(now + 36 * 3600 * 1000).toISOString() });
+  const next = events.filter((ev) => !ev.allDay && ev.endMs > now).slice(0, 3)
+    .map((ev) => ({ summary: ev.summary || '(no title)', startMs: ev.startMs, endMs: ev.endMs, location: ev.location || '' }));
+  return { events: next, hasCalendar: true, calendarId: match.s.id };
+}
+
 async function handleApiCall(channel, e, method, args) {
   const svc = svcOfSender(e.sender);
   const appDef = svc && API_APPS[svc.type];
@@ -1396,7 +1436,7 @@ async function handleApiCall(channel, e, method, args) {
       const clientId = String(a.clientId || '').trim();
       const clientSecret = String(a.clientSecret || '').trim();
       if (!clientId || !clientSecret) throw new Error('Paste both the Client ID and the Client secret.');
-      if (!/\.apps\.googleusercontent\.com$/.test(clientId) && !process.env.ROOST_GOOGLE_AUTH_URL) {
+      if (!/\.apps\.googleusercontent\.com$/.test(clientId) && !(process.env.ROOST_GOOGLE_AUTH_URL && !app.isPackaged)) {
         throw new Error('That does not look like a Google Client ID (it ends with .apps.googleusercontent.com).');
       }
       gmailStore.setClient(clientId, clientSecret);
@@ -1410,6 +1450,23 @@ async function handleApiCall(channel, e, method, args) {
       data = { view: settings().mailView };
     } else if (method === 'openViewSettings') {
       openSettings('mailview');
+      data = {};
+    } else if (method === 'upcomingEvents') {
+      data = await upcomingEventsFor(acc.status().email);
+    } else if (method === 'openCalendar') {
+      const { calendarId } = await upcomingEventsFor(acc.status().email).catch(() => ({}));
+      const cal = svcById(calendarId) || config.services.find((s) => s.type === 'calendar');
+      if (cal) select(cal.id);
+      data = { opened: !!cal };
+    } else if (method === 'noteShortcut') {
+      // Counts how often each shortcut is used, so the shortcut bar can drop the ones a person knows.
+      const k = String(a.key || '');
+      const learned = config.keysLearned || (config.keysLearned = {});
+      if (LEARN_KEYS.has(k) && (learned[k] || 0) < KEY_LEARNED_AT) {
+        learned[k] = (learned[k] || 0) + 1;
+        store.save(config);
+        if (learned[k] === KEY_LEARNED_AT) pushState();
+      }
       data = {};
     } else if (method === 'showShortcuts') {
       showUiPanel('ui:shortcuts');
@@ -1451,6 +1508,8 @@ ipcMain.handle('gcal:call', (e, method, args) => handleApiCall('gcal', e, method
 ipcMain.on('svc:action', (e, action) => {
   const svc = svcOfSender(e.sender);
   if (!svc || !BRIDGE_ACTIONS.has(action)) return;
+  // Only Roost's own help pages (data: URLs in the main frame) may switch modes; never a web app's page.
+  if (e.senderFrame !== e.sender.mainFrame || !String(e.senderFrame?.url || '').startsWith('data:')) return;
   if (action === 'open-browser') openExternal(svc.url);
   if (action === 'start-page') views.get(svc.id)?.view.webContents.loadURL(svc.url).catch(() => {});
   if (action === 'use-window') setMode(svc, 'window');

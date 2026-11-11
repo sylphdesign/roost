@@ -47,13 +47,19 @@ module.exports = async ({ win, getState, test, quit }) => {
     // settings dialog
     win.webContents.send('ui:settings', 'apps');
     step('settings opens', await until(() => ui(`return document.getElementById('settings').open`)));
-    step('settings lists every app', (await ui(`return document.querySelectorAll('#s-apps .app-row:not(.app-head)').length`)) === 5);
+    const appRows = () => ui(`return [...document.querySelectorAll('#s-apps .app-row:not(.app-head)')].length`);
+    step('settings opens on Apps', await ui(`return !document.getElementById('sec-apps').hidden && document.querySelector('#s-nav [aria-current="true"]').dataset.sec === 'apps'`));
+    step('all apps default: one note, no rows', (await appRows()) === 0 && await ui(`return !document.getElementById('s-apps-default').hidden`));
+    await ui(`document.getElementById('s-apps-all').click(); return true`);
+    step('"Show all apps" lists every app', (await appRows()) === 5 && await ui(`return document.getElementById('s-apps-default').hidden`));
     await ui(`document.querySelector('[aria-label="Sounds for ${tg.name}"]').click(); return true`);
     step('turn off Telegram sounds', await until(() => test.notifyPolicy(tg.id).silent === true));
     await ui(`document.querySelector('[aria-label="Notifications for ${tg.name}"]').click(); return true`);
     step('turn off Telegram notifications', await until(() => test.notifyPolicy(tg.id).show === false && getState().services.find((s) => s.id === tg.id).muted));
     await ui(`document.querySelector('[aria-label="Badge for ${tg.name}"]').click(); return true`);
     step('turn off Telegram badge', await until(() => getState().services.find((s) => s.id === tg.id).badge === false));
+    await ui(`document.getElementById('s-apps-all').click(); return true`);
+    step('"Show all apps" off: only the changed app stays', (await appRows()) === 1 && await ui(`return !!document.querySelector('[aria-label="Badge for ${tg.name}"]')`));
     await ui(`document.getElementById('s-call').click(); return true`);
     step('turn off quiet during calls', await until(() => getState().settings.callQuiet === false));
     test.setInCall(true);
