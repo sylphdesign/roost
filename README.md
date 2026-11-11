@@ -20,8 +20,10 @@ Roost is a macOS app that puts your email, calendar and chat apps in one window.
 | **Search all inboxes** (⌘⇧F) | **Google Calendar** inside Roost |
 | ![Full view of an email](docs/screenshots/05-full-view.png) | ![Settings, Email view](docs/screenshots/06-settings-email-view.png) |
 | **Full view** — hide the list with ⤢ or `\` | **Settings › Email view** |
-| ![Keyboard shortcuts](docs/screenshots/07-keyboard-shortcuts.png) | |
-| **Keyboard shortcuts** (⌘/) | |
+| ![Keyboard shortcuts](docs/screenshots/07-keyboard-shortcuts.png) | ![Compose with the formatting bar and a Smart Compose suggestion](docs/screenshots/08-compose-smart-compose.png) |
+| **Keyboard shortcuts** (⌘/) | **Compose** — formatting bar, Smart Compose (Tab to accept) |
+| ![Recipient autofill in the To field](docs/screenshots/09-compose-autofill.png) | |
+| **Autofill** — pick people you write to | |
 
 To make them again: `npm run screenshots` (needs ffmpeg for the tour).
 
@@ -29,12 +31,13 @@ To make them again: `npm run screenshots` (needs ffmpeg for the tour).
 
 - **One window.** A left sidebar holds your email inboxes (top) and your messenger apps (bottom). A top bar holds Google Calendar, Keep, Drive and Docs.
 - **Gmail inside Roost.** Uses Google's official Gmail API. Inbox tabs (Primary, Promotions, Social, Updates, Forums), search, read, reply, reply all, forward, compose, archive, delete, star. Tick boxes to act on many emails at once.
+- **A Gmail-style composer.** Rich text with the same formatting bar as Gmail: font, size, bold, italic, underline, text and background color, align, lists, indent, quote, strikethrough, remove formatting and links. Emails are sent as HTML plus a plain text copy. Recipient autofill suggests people from your own Sent and Inbox mail (no extra Google permission).
 - **Google Calendar inside Roost.** Uses Google's Calendar API.
 - **Many accounts.** Add Gmail, WhatsApp and the others more than once. Each one is separate.
 - **Search all inboxes** at once (⌘⇧F).
 - **Quiet time.** Do Not Disturb (⌘⇧D), quiet while you are on a call, and quiet hours.
 - **Email view your way.** Open emails next to the list, under the list, or full screen. Compact rows, preview text, labels column.
-- **Optional AI help** with your own Claude key: Help me write, refine, smart replies, summaries.
+- **Optional AI help** with your own Claude key: Smart Compose (gray suggestions as you type, Tab to accept), Help me write, refine, smart replies, summaries. Google's own Gemini features are not available to other apps, so Roost uses Claude. The ↗ button in compose opens the draft in Gmail if you want Gemini.
 - **Your own icons.** Right-click a tile > Icon > App Icon, First Letter or Choose Picture.
 - **Private by design.** No Roost server. See [Privacy and security](#privacy-and-security).
 
@@ -64,6 +67,7 @@ Then connect Gmail. Roost needs a free Google key that you make yourself. Follow
 - [docs/INSTALL.md](docs/INSTALL.md) - requirements, build, first run
 - [docs/GOOGLE_SETUP.md](docs/GOOGLE_SETUP.md) - make your Google key, step by step
 - [docs/PERMISSIONS.md](docs/PERMISSIONS.md) - every prompt macOS and Google will show, and what to click
+- [CHANGELOG.md](CHANGELOG.md) - what changed
 - [SECURITY.md](SECURITY.md) - report a problem, what is stored where
 - [CONTRIBUTING.md](CONTRIBUTING.md) - help build Roost
 
@@ -106,12 +110,28 @@ Inside an inbox:
 | Esc | Close |
 | ? | Show shortcuts |
 
+While you write an email:
+
+| Keys | What it does |
+| --- | --- |
+| Tab or → | Accept the Smart Compose suggestion |
+| ⌘B / ⌘I / ⌘U | Bold / italic / underline |
+| ⌘K | Insert link |
+| ⌘⇧7 / ⌘⇧8 | Numbered / bulleted list |
+| ⌘⇧9 | Quote |
+| ⌘] / ⌘[ | Indent more / less |
+| ⌘⇧X | Strikethrough |
+| ⌘⇧L / ⌘⇧E / ⌘⇧R | Align left / center / right |
+| ⌘\ | Remove formatting |
+| ⌘Enter | Send |
+| ↑ ↓ then Enter or Tab | Pick a suggested recipient |
+
 ## Privacy and security
 
 - Roost has **no server**. There is no Roost account and no tracking.
 - You make your **own** Google OAuth key. Roost talks to Google directly with it.
 - Google tokens stay on your Mac, encrypted with the macOS Keychain (Electron `safeStorage`).
-- Nothing leaves your Mac except calls to Google, and to Anthropic only if you add a Claude key and click an AI button.
+- Nothing leaves your Mac except calls to Google, and to Anthropic only if you add a Claude key. Then Anthropic gets the text you ask about when you click an AI button, and, while Smart Compose is on, the draft you are typing (plus the conversation you reply to) each time you pause. Turn Smart Compose off with the ✨ button on the formatting bar.
 - Roost never sees your Google password. Sign-in happens in your browser on Google's own page.
 
 More in [SECURITY.md](SECURITY.md).
@@ -127,7 +147,7 @@ src/
   gmail/               the Gmail screen (HTML, CSS, JS)
   calendar/            the Calendar screen (HTML, CSS, JS)
   ui/                  sidebar, top bar, Settings, Add app dialog
-  ai.js                optional Claude helpers (Help me write, summaries)
+  ai.js                optional Claude helpers (Smart Compose, Help me write, summaries)
   chrome-bridge.js     opens Keep, Drive and Docs in a private Chrome window
   preload-service.js   runs inside each app: unread counts, notification rules
   preload-ui.js        bridge for the sidebar UI

@@ -45,14 +45,14 @@ module.exports = async ({ win, getState, quit }) => {
     await shot('conversation');
     await js(`${helpers} (byText('.reply-bar button', /^\\s*Reply\\s*$/) || byLabel(/^Reply$/)).click(); return true;`);
     const prefill = await until(`${helpers} return vis('compose') && document.getElementById('compose-to').value.includes('@');`);
-    const pre = await js(`return { to: document.getElementById('compose-to').value, subject: document.getElementById('compose-subject').value, body: document.getElementById('compose-body').value.slice(0, 120) };`);
-    step('Reply opens compose with To, Re: subject and quote', prefill && /^Re: Project kickoff$/.test(pre.subject) && /wrote:/.test(pre.body), pre);
-    await js(`${helpers} const b=document.getElementById('compose-body'); b.focus(); b.value = 'UI reply works' + b.value; b.dispatchEvent(new Event('input',{bubbles:true})); document.getElementById('compose-send').click(); return true;`);
+    const pre = await js(`return { to: document.getElementById('compose-to').value, subject: document.getElementById('compose-subject').value, body: document.getElementById('compose-quote').textContent.slice(0, 120), quoteToggle: !document.getElementById('compose-quote-toggle').hidden };`);
+    step('Reply opens compose with To, Re: subject and quote', prefill && /^Re: Project kickoff$/.test(pre.subject) && /wrote:/.test(pre.body) && pre.quoteToggle, pre);
+    await js(`${helpers} const b=document.getElementById('compose-body'); b.focus(); document.execCommand('insertText', false, 'UI reply works'); document.getElementById('compose-send').click(); return true;`);
     step('Send closes compose and confirms', await until(`${helpers} return !vis('compose') && /Sent/.test(document.getElementById('toasts').textContent);`, 10000),
       await js(`return document.getElementById('toasts').textContent;`));
     const sent = await (await fetch('http://127.0.0.1:47556/')).json().catch(() => ({ sent: [] }));
     const last = sent.sent[sent.sent.length - 1];
-    step('fake Google received the reply in the thread', last && /UI reply works/.test(last.text) && /conv-3@/.test(last.headers['in-reply-to'] || ''), last && last.headers);
+    step('fake Google received the reply in the thread', last && /UI reply works/.test(last.text) && /wrote:/.test(last.text) && /conv-3@/.test(last.headers['in-reply-to'] || ''), last && last.headers);
 
     const before = await js(`return document.querySelectorAll('#thread-list .row').length;`);
     await js(`${helpers} byLabel(/^Archive/).click(); return true;`);
@@ -61,13 +61,39 @@ module.exports = async ({ win, getState, quit }) => {
 
     await js(`document.getElementById('compose-btn').click(); return true;`);
     await until(`return !document.getElementById('compose').hidden;`);
-    await js(`${helpers} setVal('compose-to', 'friend@example.com'); setVal('compose-subject', 'Hello from Roost UI'); setVal('compose-body', 'New email body'); return true;`);
+    // Recipient autofill from my own mail
+    await js(`${helpers} const t=document.getElementById('compose-to'); t.focus(); t.value='a'; t.setSelectionRange(1,1); t.dispatchEvent(new Event('input',{bubbles:true})); return true;`);
+    const acOk = await until(`return !document.getElementById('addr-suggest').hidden && document.querySelectorAll('#addr-suggest .addr-opt').length > 0;`, 6000);
+    const acList = await js(`return [...document.querySelectorAll('#addr-suggest .addr-opt')].map((li) => li.textContent);`);
+    step('typing in To shows contact suggestions', acOk, acList);
+    await shot('autofill');
+    await js(`${helpers} document.getElementById('compose-to').dispatchEvent(new KeyboardEvent('keydown',{key:'Enter',bubbles:true,cancelable:true})); return true;`);
+    const picked = await js(`return document.getElementById('compose-to').value;`);
+    step('Enter picks the contact', /@/.test(picked) && /, $/.test(picked), picked);
+    await js(`${helpers} setVal('compose-to', 'friend@example.com'); setVal('compose-subject', 'Hello from Roost UI'); return true;`);
+    // Rich text: type, select a word, make it bold, add a bulleted list
+    const boldRun = await js(`${helpers} try { const b=document.getElementById('compose-body'); b.focus(); document.execCommand('insertText', false, 'New email body');
+      const w=document.createTreeWalker(b, NodeFilter.SHOW_TEXT); const tn=w.nextNode(); const r=document.createRange(); r.setStart(tn,0); r.setEnd(tn,3);
+      const s=getSelection(); s.removeAllRanges(); s.addRange(r); document.getElementById('fmt-bold').click(); return 'ok'; } catch (e) { return String(e.stack || e) + ' | ' + document.getElementById('compose-body').innerHTML; }`);
+    if (boldRun !== 'ok') step('select text in the editor', false, boldRun);
+    step('Bold button makes the selection bold', await js(`return /<b>New<\\/b>/.test(document.getElementById('compose-body').innerHTML) && document.getElementById('fmt-bold').getAttribute('aria-pressed') === 'true';`),
+      await js(`return document.getElementById('compose-body').innerHTML;`));
+    await js(`const b=document.getElementById('compose-body'); const r=document.createRange(); r.selectNodeContents(b); r.collapse(false); const s=getSelection(); s.removeAllRanges(); s.addRange(r);
+      document.execCommand('insertParagraph'); document.execCommand('insertText', false, 'point one'); document.getElementById('fmt-ul').click(); return true;`);
+    step('Bulleted list button makes a list', await js(`return !!document.querySelector('#compose-body ul li');`), await js(`return document.getElementById('compose-body').innerHTML;`));
+    await js(`document.getElementById('fmt-color').click(); return true;`);
+    step('Color menu shows text and background colors', await js(`return !document.getElementById('fmt-pop').hidden && document.querySelectorAll('#fmt-pop .fmt-swatch').length === 112;`));
+    await shot('format');
+    await js(`document.getElementById('fmt-color').click(); return true;`);
     await shot('compose');
     await js(`document.getElementById('compose-send').click(); return true;`);
     await wait(1500);
     const sent2 = await (await fetch('http://127.0.0.1:47556/')).json().catch(() => ({ sent: [] }));
     const l2 = sent2.sent[sent2.sent.length - 1];
     step('Compose sends a new email', l2 && l2.headers.subject === 'Hello from Roost UI' && /friend@example\.com/.test(l2.headers.to), l2 && l2.headers);
+    const rawSent = l2 ? Buffer.from(l2.raw, 'base64url').toString('utf8') : '';
+    const htmlPart = (() => { const m = rawSent.match(/Content-Type: text\/html; charset="UTF-8"\r\nContent-Transfer-Encoding: base64\r\n\r\n([A-Za-z0-9+/=\r\n]+)/); return m ? Buffer.from(m[1].replace(/\s+/g, ''), 'base64').toString('utf8') : ''; })();
+    step('the email is sent as rich text (HTML + plain text)', /multipart\/alternative/.test(rawSent) && /<b>New<\/b>/.test(htmlPart) && /<li>point one<\/li>/.test(htmlPart) && /New email body/.test(l2.text), htmlPart.slice(0, 300));
 
     await js(`document.getElementById('search-input').focus(); document.getElementById('search-input').value = 'invoice'; document.getElementById('search-form').requestSubmit(); return true;`);
     step('Search shows matching mail', await until(`const r=[...document.querySelectorAll('#thread-list .row')]; return r.length >= 1 && r.every((x) => /invoice/i.test(x.textContent));`));

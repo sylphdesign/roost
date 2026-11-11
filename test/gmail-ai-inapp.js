@@ -22,7 +22,8 @@ module.exports = async ({ quit }) => {
     const byText = (sel, re) => [...document.querySelectorAll(sel)].find((n) => re.test(n.textContent || n.getAttribute('aria-label') || ''));
     const key = (n, k, extra) => n.dispatchEvent(new KeyboardEvent('keydown', Object.assign({ key: k, bubbles: true, cancelable: true }, extra || {})));
     const panelMode = () => vis('ai-panel') ? $('ai-panel').dataset.mode : null;
-    const body = () => $('compose-body').value;
+    const own = () => { const b = $('compose-body'); const g = b.querySelector('.ghost'); let t = b.innerText; if (g) t = t.replace(g.innerText, ''); return t.replace(/\\n+$/, ''); };
+    const body = () => { const q = $('compose-quote').textContent.replace(/\\s+$/, ''); return own() + (q ? '\\n\\n' + q : ''); };
     window.confirm = () => true;
   `;
   const panel = () => js(`${H} return { mode: panelMode(), text: $('ai-panel').textContent.slice(0, 300) };`);
@@ -80,10 +81,10 @@ module.exports = async ({ quit }) => {
       // ---- Working state + cancel (late result is ignored) ----
       await js(`${H} $('compose-ai').click(); return true;`);
       await until(`${H} return panelMode() === 'refine';`);
-      const busy = await js(`${H} byText('#ai-panel .ai-item', /^Shorten$/).click(); const r = { mode: panelMode(), disabled: $('compose-ai').disabled, label: $('compose-ai-label').textContent, readOnly: $('compose-body').readOnly, send: $('compose-send').disabled, cancel: !!$('ai-cancel') }; $('ai-cancel').click(); return r;`);
+      const busy = await js(`${H} byText('#ai-panel .ai-item', /^Shorten$/).click(); const r = { mode: panelMode(), disabled: $('compose-ai').disabled, label: $('compose-ai-label').textContent, readOnly: $('compose-body').contentEditable === 'false', send: $('compose-send').disabled, cancel: !!$('ai-cancel') }; $('ai-cancel').click(); return r;`);
       step('while working: buttons disabled, Writing… shown, Cancel offered', busy.mode === 'working' && busy.disabled && busy.label === 'Writing…' && busy.readOnly && busy.send && busy.cancel, busy);
       await wait(1000);
-      step('Cancel ignores the late result', await js(`${H} return body().startsWith('Sounds good to me.\\n') && panelMode() === 'refine' && !$('compose-ai').disabled && !$('compose-body').readOnly;`), await panel());
+      step('Cancel ignores the late result', await js(`${H} return body().startsWith('Sounds good to me.\\n') && panelMode() === 'refine' && !$('compose-ai').disabled && $('compose-body').contentEditable === 'true';`), await panel());
       await js(`${H} key($('ai-panel').querySelector('.ai-item'), 'Escape'); return true;`);
       step('Esc closes the AI panel but keeps the draft', await js(`${H} return !vis('ai-panel') && vis('compose');`));
 
@@ -115,6 +116,29 @@ module.exports = async ({ quit }) => {
       await js(`${H} byText('#ai-panel .ai-item', /Suggest subject/).click(); return true;`);
       await wait(800);
       step('Suggest subject keeps my subject when I say no', await js(`${H} return $('compose-subject').value === 'AI subject: AI write: Invite the team to lunch on Friday';`));
+      await js(`${H} window.confirm = () => true; $('compose-discard').click(); return true;`);
+
+      // ---- Smart Compose: gray suggestion, Tab accepts ----
+      await until(`${H} return !vis('compose');`);
+      await js(`${H} $('compose-btn').click(); return true;`);
+      await until(`${H} return vis('compose');`);
+      step('Smart Compose button is on in the format bar', await js(`${H} return vis('fmt-bar') && $('fmt-smart').getAttribute('aria-pressed') === 'true';`));
+      await js(`${H} const b=$('compose-body'); b.focus(); document.execCommand('insertText', false, 'Hi team, thank you'); return true;`);
+      const ghostOk = await until(`return !!document.querySelector('#compose-body .ghost');`, 6000);
+      step('a gray suggestion shows after a short pause', ghostOk && await js(`return document.querySelector('#compose-body .ghost').firstChild.nodeValue === ' and thanks for your help.';`),
+        await js(`const g=document.querySelector('#compose-body .ghost'); return g && g.textContent;`));
+      step('the suggestion is not part of the draft text', await js(`${H} return own() === 'Hi team, thank you' && $('compose-ai-label').textContent === 'Refine';`), await js(`${H} return own();`));
+      await shot('smart-compose');
+      await js(`${H} key($('compose-body'), 'Tab'); return true;`);
+      step('Tab accepts the suggestion', await until(`${H} return own() === 'Hi team, thank you and thanks for your help.' && !document.querySelector('#compose-body .ghost');`), await js(`${H} return own();`));
+      await until(`return !!document.querySelector('#compose-body .ghost');`, 4000);
+      await js(`${H} key($('compose-body'), 'a'); return true;`);
+      step('typing another key drops the suggestion', await js(`return !document.querySelector('#compose-body .ghost');`));
+      await js(`${H} $('fmt-smart').dispatchEvent(new MouseEvent('mousedown',{bubbles:true})); $('fmt-smart').click(); return true;`);
+      await js(`${H} const b=$('compose-body'); b.focus(); document.execCommand('insertText', false, ' More words here'); return true;`);
+      await wait(1500);
+      step('turning Smart Compose off stops suggestions', await js(`${H} return $('fmt-smart').getAttribute('aria-pressed') === 'false' && !document.querySelector('#compose-body .ghost');`));
+      await js(`${H} $('fmt-smart').click(); return true;`);
       await js(`${H} window.confirm = () => true; $('compose-discard').click(); return true;`);
       // Focus re-check must not break anything.
       await js(`window.dispatchEvent(new Event('focus')); return true;`);

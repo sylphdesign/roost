@@ -180,12 +180,21 @@
             <label for="compose-subject">Subject</label>
             <input id="compose-subject" type="text" autocomplete="off">
           </div>
-          <textarea id="compose-body" class="compose-body" aria-label="Message body"></textarea>
+          <div id="compose-body" class="compose-body" contenteditable="true" role="textbox" aria-multiline="true"
+               aria-label="Message body" spellcheck="true" data-placeholder=""></div>
+          <button id="compose-quote-toggle" class="quote-toggle" type="button" hidden aria-expanded="false"
+                  aria-controls="compose-quote" title="Show trimmed content" aria-label="Show trimmed content">•••</button>
+          <div id="compose-quote" class="compose-quote" hidden></div>
           <div id="compose-attachments" class="chips"></div>
+          <div id="fmt-bar" class="fmt-bar" role="toolbar" aria-label="Formatting options"></div>
           <p id="compose-error" class="form-error" role="alert" hidden></p>
           <footer class="compose-footer">
             <button id="compose-send" class="btn btn-primary" type="submit">
               <span data-icon="send"></span> Send
+            </button>
+            <button id="compose-fmt" class="icon-btn fmt-toggle" type="button" aria-pressed="true" aria-controls="fmt-bar"
+                    aria-label="Formatting options" title="Formatting options">
+              <span class="fmt-aa" aria-hidden="true">A<u>a</u></span>
             </button>
             <button id="compose-attach" class="icon-btn" type="button" aria-label="Attach files" title="Attach files">
               <span data-icon="clip"></span>
@@ -201,6 +210,8 @@
           </footer>
         </form>
         <div id="ai-panel" class="ai-panel" hidden role="dialog" aria-label="AI writing"></div>
+        <ul id="addr-suggest" class="addr-suggest" role="listbox" aria-label="Contacts" hidden></ul>
+        <div id="fmt-pop" class="fmt-pop" hidden></div>
       </div>
     </section>
   </section>

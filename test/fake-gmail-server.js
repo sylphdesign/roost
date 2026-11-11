@@ -733,6 +733,16 @@ async function startFakeGmail({ port = 0, email = 'test.user@example.com' } = {}
       return json(res, 200, threadOut(t, 'minimal'));
     }
 
+    if (req.method === 'GET' && rest === 'messages') {
+      const labelIds = u.searchParams.getAll('labelIds');
+      const max = Math.min(parseInt(u.searchParams.get('maxResults'), 10) || 100, 500);
+      const msgs = Object.values(state.messages)
+        .filter((x) => !x.labelIds.includes('SPAM') && !x.labelIds.includes('TRASH') && labelIds.every((l) => x.labelIds.includes(l)))
+        .sort((a, b) => b.internalDate - a.internalDate)
+        .slice(0, max);
+      return json(res, 200, { messages: msgs.map((x) => ({ id: x.id, threadId: x.threadId })), resultSizeEstimate: msgs.length });
+    }
+
     if (req.method === 'GET' && (m = /^messages\/([^/]+)$/.exec(rest))) {
       const msg = state.messages[decodeURIComponent(m[1])];
       if (!msg) return notFound();

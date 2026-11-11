@@ -55,3 +55,29 @@ test('prompts validate input', () => {
   assert.match(buildPrompt({ task: 'rewrite', style: 'shorter', draft: 'long text' }), /shorter/);
   assert.deepStrictEqual(parseReplies('a\nb'), ['a', 'b']);
 });
+
+test('complete task: prompt asks for a short continuation of the draft', () => {
+  const p = buildPrompt({ task: 'complete', draft: 'Hi Sam, thanks for', subject: 'Lunch' });
+  assert.match(p, /Hi Sam, thanks for\n<\/draft>/);
+  assert.match(p, /at most 10 words/);
+  assert.throws(() => buildPrompt({ task: 'complete', draft: '  ' }), /Write something first/);
+});
+
+test('cleanCompletion keeps the leading space, drops <none>, quotes and repeats', () => {
+  const { cleanCompletion } = require('../src/ai');
+  assert.strictEqual(cleanCompletion(' the quick reply.\nextra line', 'Thanks for'), ' the quick reply.');
+  assert.strictEqual(cleanCompletion('s for your help', 'Thank'), 's for your help');
+  assert.strictEqual(cleanCompletion(' more', 'Thanks '), 'more');
+  assert.strictEqual(cleanCompletion('<none>', 'Hi'), '');
+  assert.strictEqual(cleanCompletion(' "see you soon"', 'Ok'), ' see you soon');
+  assert.strictEqual(cleanCompletion('thanks for lunch today', 'Hi, thanks for'), ' lunch today');
+  assert.strictEqual(cleanCompletion(' a b c d e f g h i j k l m n', 'x').trim().split(' ').length, 12);
+});
+
+test('complete task through the API returns raw continuation (empty allowed)', async () => {
+  const fc = await fakeClaude('<none>');
+  try {
+    const r = await runAiTask({ task: 'complete', draft: 'Hello' }, { getKey: () => 'sk-test', fake: false, baseURL: fc.url });
+    assert.deepStrictEqual(r, { text: '' });
+  } finally { fc.server.close(); }
+});

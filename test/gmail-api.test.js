@@ -75,3 +75,55 @@ test('summarizes a thread from metadata', () => {
 });
 
 test('html entities', () => assert.strictEqual(decodeHtmlEntities('a &amp; b &lt;c&gt; &#x27;d&#39;'), "a & b <c> 'd'"));
+
+test('builds multipart/alternative when an HTML body is given', () => {
+  const raw = buildRawMessage({ from: 'me@x.com', to: 'you@x.com', subject: 'Rich', body: 'Hi *there*', html: '<div>Hi <b>there</b></div>' });
+  assert.match(raw, /Content-Type: multipart\/alternative; boundary="(roost_alt_[0-9a-f]+)"/);
+  const alt = raw.match(/boundary="([^"]+)"/)[1];
+  const parts = raw.split(`--${alt}`);
+  assert.strictEqual(parts.length, 4); // preamble, text, html, closing
+  assert.match(parts[1], /text\/plain/);
+  assert.match(parts[2], /text\/html/);
+  const htmlB64 = parts[2].split('\r\n\r\n')[1].replace(/\r\n/g, '');
+  assert.strictEqual(Buffer.from(htmlB64, 'base64').toString('utf8'), '<div>Hi <b>there</b></div>');
+});
+
+test('HTML body plus attachments nests alternative inside mixed', () => {
+  const raw = buildRawMessage({ from: 'me@x.com', to: 'you@x.com', subject: 'R', body: 'b', html: '<b>b</b>',
+    attachments: [{ filename: 'a.txt', mimeType: 'text/plain', data: Buffer.from('x') }] });
+  assert.match(raw, /multipart\/mixed; boundary="roost_[0-9a-f]+"/);
+  assert.match(raw, /multipart\/alternative; boundary="roost_alt_/);
+  assert.match(raw, /filename="a.txt"/);
+});
+
+test('listContacts ranks people I wrote to first and skips me and no-reply', async () => {
+  const { GmailAccount } = require('../src/gmail-api');
+  const msgs = {
+    s1: { label: 'SENT', ts: 3, headers: { To: 'Ann Lee <ann@x.com>, bob@x.com', Cc: 'Me <me@x.com>' } },
+    s2: { label: 'SENT', ts: 2, headers: { To: 'ann@x.com' } },
+    i1: { label: 'INBOX', ts: 5, headers: { From: '"Carl" <carl@x.com>' } },
+    i2: { label: 'INBOX', ts: 4, headers: { From: 'Shop <no-reply@shop.com>' } },
+  };
+  let calls = 0;
+  const self = {
+    account: () => ({ email: 'me@x.com' }),
+    api: async (_m, p, { query }) => {
+      calls++;
+      if (p.endsWith('/messages')) return { messages: Object.keys(msgs).filter((k) => msgs[k].label === query.labelIds[0]).map((id) => ({ id })) };
+      const m = msgs[p.split('/').pop()];
+      return { internalDate: String(m.ts), payload: { headers: Object.entries(m.headers).map(([name, value]) => ({ name, value })) } };
+    },
+  };
+  const { contacts } = await GmailAccount.prototype.listContacts.call(self);
+  assert.deepStrictEqual(contacts.map((c) => c.email), ['ann@x.com', 'bob@x.com', 'carl@x.com']);
+  assert.strictEqual(contacts[0].name, 'Ann Lee');
+  assert.strictEqual(contacts[2].name, 'Carl');
+  const before = calls;
+  await GmailAccount.prototype.listContacts.call(self);
+  assert.strictEqual(calls, before, 'second call uses the cache');
+});
+
+test('non-ASCII display names in To are RFC 2047 encoded', () => {
+  const raw = buildRawMessage({ from: 'me@x.com', to: 'Zoë Ann <z@x.com>, b@x.com', subject: 's', body: 'b' });
+  assert.match(raw, /\r\nTo: =\?UTF-8\?B\?[^?]+\?= <z@x.com>, b@x.com\r\n/);
+});

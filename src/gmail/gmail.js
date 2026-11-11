@@ -1423,6 +1423,830 @@
   }
 
   // ---------------------------------------------------------------------------
+  // Rich text editor (Gmail-style formatting), recipient autofill, Smart Compose
+  // ---------------------------------------------------------------------------
+
+  const FMT_ICONS = {
+    undo: ['M3 7v6h6', 'M21 17a9 9 0 0 0-15-6.7L3 13'],
+    redo: ['M21 7v6h-6', 'M3 17a9 9 0 0 1 15-6.7L21 13'],
+    bold: ['M6 4h8a4 4 0 0 1 0 8H6z', 'M6 12h9a4 4 0 0 1 0 8H6z'],
+    italic: ['M19 4h-9', 'M14 20H5', 'M15 4L9 20'],
+    underline: ['M6 3v7a6 6 0 0 0 12 0V3', 'M4 21h16'],
+    strike: ['M4 12h16', 'M16 6.5A4 4 0 0 0 12 4h-1a3.5 3.5 0 0 0-2 6.4', 'M8 17.5A4 4 0 0 0 12 20h1a3.5 3.5 0 0 0 2-6.4'],
+    color: ['M4 21h16', 'M6.5 17L12 4l5.5 13', 'M8.6 12.5h6.8'],
+    alignLeft: ['M17 10H3', 'M21 6H3', 'M21 14H3', 'M17 18H3'],
+    alignCenter: ['M18 10H6', 'M21 6H3', 'M21 14H3', 'M18 18H6'],
+    alignRight: ['M21 10H7', 'M21 6H3', 'M21 14H3', 'M21 18H7'],
+    listNum: ['M10 6h11', 'M10 12h11', 'M10 18h11', 'M4 5l1-1v6', 'M4 10h2', 'M6.5 20H4c0-1.2 2.5-2 2.5-3.2 0-.8-.7-1.3-1.3-1.3-.6 0-1 .3-1.2.8'],
+    listBullet: ['M9 6h12', 'M9 12h12', 'M9 18h12', 'M4.5 6h.01', 'M4.5 12h.01', 'M4.5 18h.01'],
+    outdent: ['M21 5H3', 'M21 19H3', 'M21 12h-9', 'M7 9l-3 3 3 3'],
+    indent: ['M21 5H3', 'M21 19H3', 'M21 12h-9', 'M4 9l3 3-3 3'],
+    quote: ['M10 11H6a1 1 0 0 1-1-1V7a1 1 0 0 1 1-1h3a1 1 0 0 1 1 1v4c0 3-1.5 5-4 6', 'M19 11h-4a1 1 0 0 1-1-1V7a1 1 0 0 1 1-1h3a1 1 0 0 1 1 1v4c0 3-1.5 5-4 6'],
+    clear: ['M4 7V4h16v3', 'M5 20h6', 'M13 4L8 20', 'M15 15l5 5', 'M20 15l-5 5'],
+    link: ['M10 13a5 5 0 0 0 7.54.54l3-3a5 5 0 0 0-7.07-7.07l-1.72 1.71', 'M14 11a5 5 0 0 0-7.54-.54l-3 3a5 5 0 0 0 7.07 7.07l1.71-1.71'],
+    caret: ['M6 9l6 6 6-6'],
+    size: ['M4 7V4h16v3', 'M9 20h6', 'M12 4v16'],
+  };
+  Object.assign(ICONS, FMT_ICONS);
+
+  const FONTS = [
+    { label: 'Sans Serif', value: 'arial, sans-serif' },
+    { label: 'Serif', value: '"times new roman", serif' },
+    { label: 'Fixed Width', value: 'monospace, monospace' },
+    { label: 'Wide', value: '"arial black", sans-serif' },
+    { label: 'Narrow', value: '"arial narrow", sans-serif' },
+    { label: 'Comic Sans MS', value: '"comic sans ms", sans-serif' },
+    { label: 'Garamond', value: 'garamond, "times new roman", serif' },
+    { label: 'Georgia', value: 'georgia, serif' },
+    { label: 'Tahoma', value: 'tahoma, sans-serif' },
+    { label: 'Trebuchet MS', value: '"trebuchet ms", sans-serif' },
+    { label: 'Verdana', value: 'verdana, sans-serif' },
+  ];
+  const SIZES = [
+    { label: 'Small', value: '1' },
+    { label: 'Normal', value: '3', normal: true },
+    { label: 'Large', value: '4' },
+    { label: 'Huge', value: '6' },
+  ];
+  const PALETTE = [
+    '#000000', '#444444', '#666666', '#999999', '#cccccc', '#eeeeee', '#f3f3f3', '#ffffff',
+    '#ff0000', '#ff9900', '#ffff00', '#00ff00', '#00ffff', '#0000ff', '#9900ff', '#ff00ff',
+    '#f4cccc', '#fce5cd', '#fff2cc', '#d9ead3', '#d0e0e3', '#cfe2f3', '#d9d2e9', '#ead1dc',
+    '#ea9999', '#f9cb9c', '#ffe599', '#b6d7a8', '#a2c4c9', '#9fc5e8', '#b4a7d6', '#d5a6bd',
+    '#e06666', '#f6b26b', '#ffd966', '#93c47d', '#76a5af', '#6fa8dc', '#8e7cc3', '#c27ba0',
+    '#cc0000', '#e69138', '#f1c232', '#6aa84f', '#45818e', '#3d85c6', '#674ea7', '#a64d79',
+    '#990000', '#b45f06', '#bf9000', '#38761d', '#134f5c', '#0b5394', '#351c75', '#741b47',
+  ];
+
+  const editor = { savedRange: null };
+  const bodyEl = () => $('compose-body');
+
+  function escapeHtml(s) {
+    return String(s).replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/"/g, '&quot;');
+  }
+
+  // Plain text of a DOM fragment, with line breaks for <br> and block elements.
+  function fragText(root) {
+    let out = '';
+    const BLOCK = /^(DIV|P|LI|BLOCKQUOTE|H[1-6]|PRE|UL|OL|TR)$/;
+    const walk = (n) => {
+      if (n.nodeType === 3) { out += n.nodeValue; return; }
+      if (n.nodeType !== 1 && n.nodeType !== 11) return;
+      if (n.nodeType === 1 && n.classList && n.classList.contains('ghost')) return;
+      if (n.nodeName === 'BR') { out += '\n'; return; }
+      const block = BLOCK.test(n.nodeName);
+      if (block && out && !out.endsWith('\n')) out += '\n';
+      for (const c of n.childNodes) walk(c);
+      if (block && out && !out.endsWith('\n')) out += '\n';
+    };
+    walk(root);
+    return out;
+  }
+
+  // The user's own text (no Smart Compose gray text).
+  function bodyText() {
+    clearGhost();
+    return fragText(bodyEl()).replace(/ /g, ' ').replace(/\n+$/, '');
+  }
+
+  function setBodyText(text) {
+    const b = bodyEl();
+    clearGhost();
+    b.textContent = '';
+    const t = String(text || '').replace(/\r\n/g, '\n');
+    if (!t) return;
+    for (const line of t.split('\n')) {
+      const d = document.createElement('div');
+      if (line) d.textContent = line; else d.appendChild(document.createElement('br'));
+      b.appendChild(d);
+    }
+  }
+
+  function placeCaretAtEnd(node) {
+    const r = document.createRange();
+    r.selectNodeContents(node);
+    r.collapse(false);
+    const sel = window.getSelection();
+    sel.removeAllRanges();
+    sel.addRange(r);
+  }
+
+  // ---- HTML clean-up (paste + send) ---------------------------------------
+
+  const KEEP_TAGS = new Set(['B', 'STRONG', 'I', 'EM', 'U', 'S', 'STRIKE', 'DEL', 'FONT', 'SPAN', 'DIV', 'P', 'BR', 'UL', 'OL', 'LI',
+    'BLOCKQUOTE', 'A', 'H1', 'H2', 'H3', 'PRE', 'CODE', 'SUB', 'SUP', 'HR']);
+  const DROP_TAGS = new Set(['SCRIPT', 'STYLE', 'IFRAME', 'OBJECT', 'EMBED', 'IMG', 'PICTURE', 'VIDEO', 'AUDIO', 'SOURCE', 'META', 'LINK',
+    'SVG', 'MATH', 'FORM', 'INPUT', 'BUTTON', 'SELECT', 'TEXTAREA', 'TITLE', 'HEAD', 'NOSCRIPT', 'TEMPLATE', 'CANVAS']);
+  const KEEP_CSS = new Set(['color', 'background-color', 'font-weight', 'font-style', 'text-decoration', 'text-decoration-line',
+    'font-family', 'font-size', 'text-align', 'margin-left', 'padding-left', 'border-left']);
+
+  function safeHref(href) {
+    const h = String(href || '').trim();
+    return /^(https?:|mailto:)/i.test(h) ? h : null;
+  }
+
+  function cleanNode(src, out) {
+    for (const n of [...src.childNodes]) {
+      if (n.nodeType === 3) { out.appendChild(document.createTextNode(n.nodeValue)); continue; }
+      if (n.nodeType !== 1) continue;
+      const tag = n.nodeName.toUpperCase();
+      if (DROP_TAGS.has(tag) || (n.classList && n.classList.contains('ghost'))) continue;
+      if (!KEEP_TAGS.has(tag)) { cleanNode(n, out); continue; } // unknown tag: keep its content
+      const c = document.createElement(tag);
+      if (tag === 'A') {
+        const href = safeHref(n.getAttribute('href'));
+        if (href) c.setAttribute('href', href);
+      }
+      if (tag === 'FONT') {
+        for (const a of ['color', 'face', 'size']) if (n.getAttribute(a)) c.setAttribute(a, n.getAttribute(a).replace(/[<>"]/g, ''));
+      }
+      const style = n.getAttribute('style');
+      if (style) {
+        const keep = [];
+        for (const decl of style.split(';')) {
+          const i = decl.indexOf(':');
+          if (i < 0) continue;
+          const prop = decl.slice(0, i).trim().toLowerCase();
+          const val = decl.slice(i + 1).trim();
+          if (KEEP_CSS.has(prop) && val && !/url\(|expression|javascript:|[<>]/i.test(val)) keep.push(prop + ': ' + val);
+        }
+        if (keep.length) c.setAttribute('style', keep.join('; '));
+      }
+      cleanNode(n, c);
+      out.appendChild(c);
+    }
+    return out;
+  }
+
+  function sanitizeHtml(html) {
+    const doc = new DOMParser().parseFromString(String(html || ''), 'text/html'); // inert: nothing runs or loads
+    const box = document.createElement('div');
+    cleanNode(doc.body, box);
+    return box.innerHTML;
+  }
+
+  function bodyHtml() {
+    clearGhost();
+    const box = document.createElement('div');
+    cleanNode(bodyEl(), box);
+    return box.innerHTML;
+  }
+
+  // Reply quote (plain "> " lines) as Gmail-style HTML.
+  function quoteToHtml(text) {
+    const lines = String(text || '').split(/\r?\n/);
+    let html = '';
+    let inQ = false;
+    for (const line of lines) {
+      const m = /^>\s?(.*)$/.exec(line);
+      if (m && !inQ) { html += '<blockquote class="gmail_quote" style="margin:0 0 0 .8ex;border-left:1px solid #ccc;padding-left:1ex">'; inQ = true; }
+      if (!m && inQ) { html += '</blockquote>'; inQ = false; }
+      html += (m ? escapeHtml(m[1]) : escapeHtml(line)) + '<br>';
+    }
+    if (inQ) html += '</blockquote>';
+    return '<div class="gmail_quote">' + html + '</div>';
+  }
+
+  // ---- Toolbar -------------------------------------------------------------
+
+  function saveSelection() {
+    const sel = window.getSelection();
+    if (sel.rangeCount && bodyEl().contains(sel.getRangeAt(0).commonAncestorContainer)) editor.savedRange = sel.getRangeAt(0).cloneRange();
+  }
+
+  function restoreSelection() {
+    const b = bodyEl();
+    const sel = window.getSelection();
+    const inBody = sel.rangeCount && b.contains(sel.getRangeAt(0).commonAncestorContainer);
+    if (inBody && document.activeElement === b) return; // the live selection is already in the editor
+    b.focus();
+    if (editor.savedRange && b.contains(editor.savedRange.commonAncestorContainer)) {
+      sel.removeAllRanges();
+      sel.addRange(editor.savedRange);
+    } else if (!sel.rangeCount || !b.contains(sel.getRangeAt(0).commonAncestorContainer)) placeCaretAtEnd(b);
+  }
+
+  function exec(cmd, value) {
+    if (!state.compose || bodyEl().contentEditable === 'false') return;
+    restoreSelection();
+    clearGhost();
+    document.execCommand('styleWithCSS', false, cmd === 'hiliteColor');
+    document.execCommand(cmd, false, value == null ? null : value);
+    if (cmd === 'fontSize' && value === '3') {
+      // "Normal" size: drop the size so the text uses the default.
+      bodyEl().querySelectorAll('font[size="3"]').forEach((f) => f.removeAttribute('size'));
+    }
+    saveSelection();
+    updateFmtState();
+    bodyEl().dispatchEvent(new Event('input', { bubbles: true }));
+  }
+
+  function toggleQuoteBlock() {
+    restoreSelection();
+    const inQuote = String(document.queryCommandValue('formatBlock') || '').toLowerCase() === 'blockquote';
+    exec('formatBlock', inQuote ? 'div' : 'blockquote');
+  }
+
+  function fmtButton(id, iconName, label, onClick, opts = {}) {
+    const b = el('button', 'fmt-btn' + (opts.wide ? ' wide' : ''));
+    b.type = 'button';
+    b.id = 'fmt-' + id;
+    b.title = label + (opts.keys ? ' (' + opts.keys + ')' : '');
+    b.setAttribute('aria-label', label);
+    if (opts.toggle) b.setAttribute('aria-pressed', 'false');
+    if (opts.menu) { b.setAttribute('aria-haspopup', 'true'); b.setAttribute('aria-expanded', 'false'); }
+    if (opts.text) b.appendChild(el('span', 'fmt-label', opts.text));
+    else b.appendChild(icon(iconName));
+    if (opts.menu) { const c = icon('caret'); c.setAttribute('class', 'icon caret'); b.appendChild(c); }
+    // Keep the text selection in the editor when a toolbar button is clicked.
+    b.addEventListener('mousedown', (e) => { e.preventDefault(); saveSelection(); });
+    b.addEventListener('click', (e) => { e.preventDefault(); onClick(b); });
+    return b;
+  }
+
+  const MOD = /Mac/i.test(navigator.platform || '') ? '⌘' : 'Ctrl+';
+
+  function buildFmtBar() {
+    const bar = $('fmt-bar');
+    bar.textContent = '';
+    const sep = () => bar.appendChild(el('span', 'fmt-sep'));
+    bar.appendChild(fmtButton('undo', 'undo', 'Undo', () => exec('undo'), { keys: MOD + 'Z' }));
+    bar.appendChild(fmtButton('redo', 'redo', 'Redo', () => exec('redo'), { keys: MOD + '⇧Z' }));
+    sep();
+    bar.appendChild(fmtButton('font', null, 'Font', (b) => openFmtMenu(b, FONTS.map((f) => ({
+      label: f.label, font: f.value, run: () => exec('fontName', f.value),
+    }))), { menu: true, wide: true, text: 'Sans Serif' }));
+    sep();
+    bar.appendChild(fmtButton('size', 'size', 'Size', (b) => openFmtMenu(b, SIZES.map((s) => ({
+      label: s.label, size: s.value, run: () => exec('fontSize', s.value),
+    }))), { menu: true }));
+    sep();
+    bar.appendChild(fmtButton('bold', 'bold', 'Bold', () => exec('bold'), { toggle: true, keys: MOD + 'B' }));
+    bar.appendChild(fmtButton('italic', 'italic', 'Italic', () => exec('italic'), { toggle: true, keys: MOD + 'I' }));
+    bar.appendChild(fmtButton('underline', 'underline', 'Underline', () => exec('underline'), { toggle: true, keys: MOD + 'U' }));
+    bar.appendChild(fmtButton('color', 'color', 'Text color', (b) => openColorMenu(b), { menu: true }));
+    sep();
+    bar.appendChild(fmtButton('align', 'alignLeft', 'Align', (b) => openFmtMenu(b, [
+      { label: 'Align left', icon: 'alignLeft', run: () => exec('justifyLeft'), keys: MOD + '⇧L' },
+      { label: 'Align center', icon: 'alignCenter', run: () => exec('justifyCenter'), keys: MOD + '⇧E' },
+      { label: 'Align right', icon: 'alignRight', run: () => exec('justifyRight'), keys: MOD + '⇧R' },
+    ]), { menu: true }));
+    bar.appendChild(fmtButton('ol', 'listNum', 'Numbered list', () => exec('insertOrderedList'), { toggle: true, keys: MOD + '⇧7' }));
+    bar.appendChild(fmtButton('ul', 'listBullet', 'Bulleted list', () => exec('insertUnorderedList'), { toggle: true, keys: MOD + '⇧8' }));
+    bar.appendChild(fmtButton('outdent', 'outdent', 'Indent less', () => exec('outdent'), { keys: MOD + '[' }));
+    bar.appendChild(fmtButton('indent', 'indent', 'Indent more', () => exec('indent'), { keys: MOD + ']' }));
+    bar.appendChild(fmtButton('quote', 'quote', 'Quote', () => toggleQuoteBlock(), { toggle: true, keys: MOD + '⇧9' }));
+    sep();
+    bar.appendChild(fmtButton('strike', 'strike', 'Strikethrough', () => exec('strikeThrough'), { toggle: true, keys: MOD + '⇧X' }));
+    bar.appendChild(fmtButton('clear', 'clear', 'Remove formatting', () => { exec('removeFormat'); exec('unlink'); }, { keys: MOD + '\\' }));
+    bar.appendChild(fmtButton('link', 'link', 'Insert link', () => openLinkPop(), { keys: MOD + 'K' }));
+    sep();
+    const smart = fmtButton('smart', 'sparkle', 'Smart Compose', () => {
+      sc.enabled = !sc.enabled;
+      try { localStorage.setItem('roost.smartCompose', sc.enabled ? 'on' : 'off'); } catch { /* ignore */ }
+      if (!sc.enabled) cancelSuggestion();
+      updateSmartButton();
+      toast(sc.enabled ? 'Smart Compose on: gray suggestions appear as you type. Press Tab to accept.' : 'Smart Compose off');
+    }, { toggle: true });
+    bar.appendChild(smart);
+    updateSmartButton();
+  }
+
+  function updateSmartButton() {
+    const b = $('fmt-smart');
+    if (!b) return;
+    b.setAttribute('aria-pressed', String(sc.enabled));
+    b.title = sc.enabled
+      ? (state.ai.configured === false ? 'Smart Compose (add your Claude key in Roost Settings to turn it on)' : 'Smart Compose is on: press Tab to accept a suggestion')
+      : 'Smart Compose is off';
+  }
+
+  function updateFmtState() {
+    if (!state.compose) return;
+    const sel = window.getSelection();
+    if (!sel.rangeCount || !bodyEl().contains(sel.getRangeAt(0).commonAncestorContainer)) return;
+    const q = (cmd) => { try { return document.queryCommandState(cmd); } catch { return false; } };
+    const set = (id, on) => { const b = $('fmt-' + id); if (b) b.setAttribute('aria-pressed', String(!!on)); };
+    set('bold', q('bold'));
+    set('italic', q('italic'));
+    set('underline', q('underline'));
+    set('strike', q('strikeThrough'));
+    set('ol', q('insertOrderedList'));
+    set('ul', q('insertUnorderedList'));
+    set('quote', String(document.queryCommandValue('formatBlock') || '').toLowerCase() === 'blockquote');
+    const face = String(document.queryCommandValue('fontName') || '').toLowerCase().replace(/["']/g, '');
+    const f = FONTS.find((x) => face && x.value.replace(/["']/g, '').startsWith(face.split(',')[0].trim()));
+    const fb = $('fmt-font');
+    if (fb) fb.querySelector('.fmt-label').textContent = f ? f.label : 'Sans Serif';
+    const align = ['justifyCenter', 'justifyRight'].find(q);
+    const ab = $('fmt-align');
+    if (ab) {
+      const name = align === 'justifyCenter' ? 'alignCenter' : align === 'justifyRight' ? 'alignRight' : 'alignLeft';
+      ab.replaceChild(icon(name), ab.firstChild);
+    }
+  }
+
+  // ---- Toolbar pop-ups -------------------------------------------------------
+
+  function closeFmtPop() {
+    const pop = $('fmt-pop');
+    if (pop.hidden) return;
+    pop.hidden = true;
+    pop.textContent = '';
+    document.querySelectorAll('.fmt-btn[aria-expanded="true"]').forEach((b) => b.setAttribute('aria-expanded', 'false'));
+  }
+
+  function showFmtPop(anchor, content) {
+    closeFmtPop();
+    const pop = $('fmt-pop');
+    pop.textContent = '';
+    pop.appendChild(content);
+    pop.hidden = false;
+    anchor.setAttribute('aria-expanded', 'true');
+    const box = $('compose').getBoundingClientRect();
+    const a = anchor.getBoundingClientRect();
+    const h = pop.offsetHeight;
+    const w = pop.offsetWidth;
+    let top = a.top - box.top - h - 6; // above the toolbar, like Gmail
+    if (top < 8) top = a.bottom - box.top + 6;
+    pop.style.top = top + 'px';
+    pop.style.left = Math.max(8, Math.min(a.left - box.left, box.width - w - 8)) + 'px';
+  }
+
+  function openFmtMenu(anchor, items) {
+    if (anchor.getAttribute('aria-expanded') === 'true') { closeFmtPop(); return; }
+    const list = el('div', 'fmt-menu');
+    list.setAttribute('role', 'menu');
+    for (const it of items) {
+      const b = el('button', 'fmt-item');
+      b.type = 'button';
+      b.setAttribute('role', 'menuitem');
+      if (it.icon) b.appendChild(icon(it.icon));
+      const t = el('span', null, it.label);
+      if (it.font) t.style.fontFamily = it.font;
+      if (it.size) t.style.fontSize = { 1: '11px', 3: '13px', 4: '17px', 6: '24px' }[it.size];
+      b.appendChild(t);
+      b.addEventListener('mousedown', (e) => e.preventDefault());
+      b.addEventListener('click', () => { closeFmtPop(); it.run(); });
+      list.appendChild(b);
+    }
+    list.addEventListener('keydown', menuKeys);
+    showFmtPop(anchor, list);
+  }
+
+  function menuKeys(e) {
+    if (e.key === 'Escape') { e.preventDefault(); e.stopPropagation(); closeFmtPop(); restoreSelection(); return; }
+    if (e.key !== 'ArrowDown' && e.key !== 'ArrowUp') return;
+    const items = [...$('fmt-pop').querySelectorAll('.fmt-item, .fmt-swatch')];
+    const i = items.indexOf(document.activeElement);
+    e.preventDefault();
+    items[(i + (e.key === 'ArrowDown' ? 1 : -1) + items.length) % items.length].focus();
+  }
+
+  function openColorMenu(anchor) {
+    if (anchor.getAttribute('aria-expanded') === 'true') { closeFmtPop(); return; }
+    const wrap = el('div', 'fmt-colors');
+    const group = (title, cmd) => {
+      const g = el('div');
+      g.appendChild(el('h3', null, title));
+      const grid = el('div', 'fmt-swatches');
+      for (const c of PALETTE) {
+        const s = el('button', 'fmt-swatch');
+        s.type = 'button';
+        s.style.background = c;
+        s.title = c;
+        s.setAttribute('aria-label', title + ' ' + c);
+        s.addEventListener('mousedown', (e) => e.preventDefault());
+        s.addEventListener('click', () => { closeFmtPop(); exec(cmd, c); });
+        grid.appendChild(s);
+      }
+      g.appendChild(grid);
+      return g;
+    };
+    wrap.appendChild(group('Background color', 'hiliteColor'));
+    wrap.appendChild(group('Text color', 'foreColor'));
+    wrap.addEventListener('keydown', menuKeys);
+    showFmtPop(anchor, wrap);
+  }
+
+  function normalizeUrl(v) {
+    const s = String(v || '').trim();
+    if (!s) return null;
+    if (/^mailto:/i.test(s) || /^https?:\/\//i.test(s)) return s;
+    if (/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(s)) return 'mailto:' + s;
+    if (/^[^\s]+\.[^\s]+$/.test(s)) return 'https://' + s;
+    return null;
+  }
+
+  function openLinkPop() {
+    const anchor = $('fmt-link');
+    if (anchor.getAttribute('aria-expanded') === 'true') { closeFmtPop(); return; }
+    saveSelection();
+    const r = editor.savedRange;
+    const selText = r ? r.toString() : '';
+    let existing = null;
+    if (r) {
+      let n = r.commonAncestorContainer;
+      while (n && n !== bodyEl()) { if (n.nodeName === 'A') { existing = n; break; } n = n.parentNode; }
+    }
+    const form = el('form', 'fmt-link');
+    const textL = el('label', null, 'Text to display');
+    const textI = el('input');
+    textI.id = 'fmt-link-text';
+    textI.value = existing ? existing.textContent : selText;
+    textL.appendChild(textI);
+    const urlL = el('label', null, 'Web address or email');
+    const urlI = el('input');
+    urlI.id = 'fmt-link-url';
+    urlI.placeholder = 'https://… or name@example.com';
+    urlI.value = existing ? existing.getAttribute('href') || '' : '';
+    urlL.appendChild(urlI);
+    const err = el('p', 'form-error');
+    err.hidden = true;
+    const row = el('div', 'row');
+    const cancel = textButton(null, 'Cancel', () => { closeFmtPop(); restoreSelection(); }, 'btn-small btn-ghost');
+    const ok = el('button', 'btn btn-primary btn-small', 'OK');
+    ok.type = 'submit';
+    ok.id = 'fmt-link-ok';
+    row.appendChild(cancel);
+    row.appendChild(ok);
+    form.append(textL, urlL, err, row);
+    form.addEventListener('keydown', (e) => { if (e.key === 'Escape') { e.preventDefault(); e.stopPropagation(); closeFmtPop(); restoreSelection(); } });
+    form.addEventListener('submit', (e) => {
+      e.preventDefault();
+      const href = normalizeUrl(urlI.value);
+      if (!href) { err.textContent = 'Type a web address (https://…) or an email address.'; err.hidden = false; urlI.focus(); return; }
+      const text = textI.value.trim() || urlI.value.trim();
+      closeFmtPop();
+      restoreSelection();
+      if (existing && bodyEl().contains(existing)) {
+        existing.setAttribute('href', href);
+        if (existing.textContent !== text) existing.textContent = text;
+        bodyEl().dispatchEvent(new Event('input', { bubbles: true }));
+      } else if (selText && text === selText) {
+        exec('createLink', href);
+      } else {
+        exec('insertHTML', '<a href="' + escapeHtml(href) + '">' + escapeHtml(text) + '</a>&nbsp;');
+      }
+    });
+    showFmtPop(anchor, form);
+    (textI.value ? urlI : textI).focus();
+  }
+
+  // ---- Editor events ---------------------------------------------------------
+
+  function onEditorKeyDown(e) {
+    if (e.isComposing) return;
+    // Smart Compose: Tab (or → at the end) takes the gray suggestion.
+    if (sc.ghost && (e.key === 'Tab' && !e.shiftKey || e.key === 'ArrowRight') && !e.metaKey && !e.ctrlKey && !e.altKey) {
+      e.preventDefault();
+      acceptSuggestion();
+      return;
+    }
+    if (sc.ghost && !/^(Shift|Meta|Control|Alt|CapsLock)$/.test(e.key)) clearGhost();
+    const mod = e.metaKey || e.ctrlKey;
+    if (!mod) return;
+    const k = e.key.toLowerCase();
+    const code = e.code;
+    let run = null;
+    if (k === 'enter') run = () => $('compose-form').requestSubmit();
+    else if (k === 'k' && !e.shiftKey) run = openLinkPop;
+    else if (e.shiftKey && code === 'Digit7') run = () => exec('insertOrderedList');
+    else if (e.shiftKey && code === 'Digit8') run = () => exec('insertUnorderedList');
+    else if (e.shiftKey && code === 'Digit9') run = toggleQuoteBlock;
+    else if (e.shiftKey && k === 'x') run = () => exec('strikeThrough');
+    else if (e.shiftKey && k === 'l') run = () => exec('justifyLeft');
+    else if (e.shiftKey && k === 'e') run = () => exec('justifyCenter');
+    else if (e.shiftKey && k === 'r') run = () => exec('justifyRight');
+    else if (!e.shiftKey && code === 'BracketRight') run = () => exec('indent');
+    else if (!e.shiftKey && code === 'BracketLeft') run = () => exec('outdent');
+    else if (!e.shiftKey && code === 'Backslash') run = () => exec('removeFormat');
+    if (!run) return; // ⌘B / ⌘I / ⌘U / ⌘Z work natively
+    e.preventDefault();
+    e.stopPropagation();
+    saveSelection();
+    run();
+  }
+
+  function onEditorPaste(e) {
+    const dt = e.clipboardData;
+    if (!dt) return;
+    const html = dt.getData('text/html');
+    e.preventDefault();
+    clearGhost();
+    if (html) document.execCommand('insertHTML', false, sanitizeHtml(html));
+    else document.execCommand('insertText', false, dt.getData('text/plain'));
+  }
+
+  // ---- Smart Compose (AI text predictions, Tab to accept) -------------------
+
+  const sc = {
+    enabled: (() => { try { return localStorage.getItem('roost.smartCompose') !== 'off'; } catch { return true; } })(),
+    timer: null, seq: 0, ghost: null, text: '', pending: false,
+  };
+
+  function clearGhost() {
+    if (!sc.ghost) return;
+    const g = sc.ghost;
+    sc.ghost = null;
+    sc.text = '';
+    const parent = g.parentNode;
+    if (parent) {
+      parent.removeChild(g);
+      parent.normalize(); // join the text node that insertNode split
+    }
+  }
+
+  function cancelSuggestion() {
+    clearTimeout(sc.timer);
+    sc.seq++;
+    clearGhost();
+  }
+
+  // Text before the cursor when the cursor is at the very end of the message (else null).
+  function textBeforeCaretAtEnd() {
+    const b = bodyEl();
+    const sel = window.getSelection();
+    if (!sel.rangeCount || !sel.isCollapsed) return null;
+    const r = sel.getRangeAt(0);
+    if (!b.contains(r.startContainer)) return null;
+    const after = document.createRange();
+    after.selectNodeContents(b);
+    after.setStart(r.endContainer, r.endOffset);
+    if (fragText(after.cloneContents()).trim()) return null;
+    const before = document.createRange();
+    before.selectNodeContents(b);
+    before.setEnd(r.startContainer, r.startOffset);
+    return fragText(before.cloneContents()).replace(/ /g, ' ');
+  }
+
+  function scheduleSuggestion() {
+    clearTimeout(sc.timer);
+    sc.seq++;
+    const c = state.compose;
+    if (!c || !sc.enabled || state.ai.configured !== true || c.ai.busy || c.sending) return;
+    sc.timer = setTimeout(requestSuggestion, 700);
+  }
+
+  async function requestSuggestion() {
+    const c = state.compose;
+    if (!c || document.activeElement !== bodyEl()) return;
+    const before = textBeforeCaretAtEnd();
+    if (before == null) return;
+    const lastLine = before.split('\n').pop();
+    if (before.trim().length < 4 || !lastLine.trim() || /[.!?]\s*$/.test(lastLine) && before.trim().split(/\s+/).length < 3) return;
+    const seq = ++sc.seq;
+    const f = composeFields();
+    const args = { task: 'complete', draft: before };
+    if (f.to) args.to = f.to;
+    if (f.subject.trim()) args.subject = f.subject.trim();
+    if (c.thread) args.thread = c.thread;
+    const r = await call('ai', args);
+    if (seq !== sc.seq || state.compose !== c || document.activeElement !== bodyEl()) return;
+    if (r && r.needsAiKey) { markAiNotConfigured(); return; }
+    const text = r && r.ok ? String(r.text || '') : '';
+    if (!text.trim()) return;
+    if (textBeforeCaretAtEnd() !== before) return; // the user moved or typed meanwhile
+    showGhost(text);
+  }
+
+  function showGhost(text) {
+    clearGhost();
+    const sel = window.getSelection();
+    if (!sel.rangeCount) return;
+    const r = sel.getRangeAt(0);
+    const g = el('span', 'ghost');
+    g.contentEditable = 'false';
+    g.setAttribute('aria-hidden', 'true');
+    g.appendChild(document.createTextNode(text));
+    g.appendChild(el('span', 'ghost-tab', 'tab'));
+    r.insertNode(g);
+    const caret = document.createRange();
+    caret.setStartBefore(g);
+    caret.collapse(true);
+    sel.removeAllRanges();
+    sel.addRange(caret);
+    sc.ghost = g;
+    sc.text = text;
+    bodyEl().setAttribute('aria-description', 'Suggestion: ' + text.trim() + '. Press Tab to accept.');
+  }
+
+  function acceptSuggestion() {
+    const t = sc.text;
+    clearGhost();
+    bodyEl().removeAttribute('aria-description');
+    if (t) document.execCommand('insertText', false, t);
+  }
+
+  // ---- Recipient autofill ----------------------------------------------------
+
+  const ac = { contacts: null, loading: null, input: null, items: [], index: 0, start: 0, end: 0 };
+
+  function loadContacts() {
+    if (ac.contacts) return Promise.resolve(ac.contacts);
+    if (ac.loading) return ac.loading;
+    ac.loading = call('listContacts').then((r) => {
+      ac.loading = null;
+      ac.contacts = r && r.ok && Array.isArray(r.contacts) ? r.contacts : [];
+      if (ac.input && document.activeElement === ac.input) updateSuggest(ac.input);
+      return ac.contacts;
+    });
+    return ac.loading;
+  }
+
+  function rememberRecipients(...values) {
+    if (!ac.contacts) return;
+    for (const v of values) {
+      for (const tok of String(v || '').split(',')) {
+        const m = /^\s*"?([^"<]*?)"?\s*<([^>]+)>\s*$/.exec(tok);
+        const email = (m ? m[2] : tok).trim();
+        if (!/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email)) continue;
+        const have = ac.contacts.find((c) => c.email.toLowerCase() === email.toLowerCase());
+        if (have) have.score = (have.score || 0) + 3;
+        else ac.contacts.unshift({ email, name: m ? m[1].trim() : '', score: 3 });
+      }
+    }
+  }
+
+  // The address being typed: from the last comma before the cursor to the next comma.
+  function currentToken(input) {
+    const v = input.value;
+    const caret = input.selectionStart == null ? v.length : input.selectionStart;
+    const start = Math.max(v.lastIndexOf(',', caret - 1), v.lastIndexOf(';', caret - 1)) + 1;
+    let end = v.slice(caret).search(/[,;]/);
+    end = end < 0 ? v.length : caret + end;
+    return { start, end, text: v.slice(start, caret).trim() };
+  }
+
+  function matchContacts(q, exclude) {
+    const s = q.toLowerCase();
+    const out = [];
+    for (const c of ac.contacts || []) {
+      if (exclude.has(c.email.toLowerCase())) continue;
+      const email = c.email.toLowerCase();
+      const name = String(c.name || '').toLowerCase();
+      let rank = -1;
+      if (email.startsWith(s) || name.startsWith(s)) rank = 0;
+      else if (name.split(/[\s.\-_]+/).some((w) => w.startsWith(s)) || email.split(/[@.\-_+]/).some((w) => w.startsWith(s))) rank = 1;
+      else if (s.length >= 3 && (email.includes(s) || name.includes(s))) rank = 2;
+      if (rank >= 0) out.push({ c, rank });
+    }
+    out.sort((a, b) => a.rank - b.rank || (b.c.score || 0) - (a.c.score || 0));
+    return out.slice(0, 8).map((x) => x.c);
+  }
+
+  function updateSuggest(input) {
+    ac.input = input;
+    if (!ac.contacts) { loadContacts(); return; }
+    const tok = currentToken(input);
+    if (!tok.text) { hideSuggest(); return; }
+    const taken = new Set(['compose-to', 'compose-cc', 'compose-bcc']
+      .flatMap((id) => $(id).value.split(/[,;]/))
+      .map((t) => { const m = /<([^>]+)>/.exec(t); return (m ? m[1] : t).trim().toLowerCase(); })
+      .filter(Boolean));
+    const items = matchContacts(tok.text, taken);
+    if (!items.length) { hideSuggest(); return; }
+    ac.items = items;
+    ac.index = 0;
+    ac.start = tok.start;
+    ac.end = tok.end;
+    renderSuggest();
+  }
+
+  function renderSuggest() {
+    const list = $('addr-suggest');
+    list.textContent = '';
+    ac.items.forEach((c, i) => {
+      const li = el('li', 'addr-opt');
+      li.id = 'addr-opt-' + i;
+      li.setAttribute('role', 'option');
+      li.setAttribute('aria-selected', String(i === ac.index));
+      const av = el('span', 'avatar-sm', (c.name || c.email).trim().charAt(0).toUpperCase());
+      av.style.background = avatarColor(c.email);
+      li.appendChild(av);
+      const t = el('span', 'addr-text');
+      t.appendChild(el('span', 'addr-name', c.name || c.email));
+      if (c.name) t.appendChild(el('span', 'addr-email', c.email));
+      li.appendChild(t);
+      li.addEventListener('mousedown', (e) => { e.preventDefault(); pickSuggest(i); });
+      li.addEventListener('mousemove', () => { if (ac.index !== i) { ac.index = i; markSuggest(); } });
+      list.appendChild(li);
+    });
+    const box = $('compose').getBoundingClientRect();
+    const r = ac.input.getBoundingClientRect();
+    list.style.top = (r.bottom - box.top + 2) + 'px';
+    list.style.left = Math.max(8, r.left - box.left - 8) + 'px';
+    list.hidden = false;
+    ac.input.setAttribute('aria-expanded', 'true');
+    ac.input.setAttribute('aria-activedescendant', 'addr-opt-' + ac.index);
+  }
+
+  function markSuggest() {
+    $('addr-suggest').querySelectorAll('.addr-opt').forEach((li, i) => li.setAttribute('aria-selected', String(i === ac.index)));
+    if (ac.input) ac.input.setAttribute('aria-activedescendant', 'addr-opt-' + ac.index);
+    const cur = $('addr-opt-' + ac.index);
+    if (cur) cur.scrollIntoView({ block: 'nearest' });
+  }
+
+  function hideSuggest() {
+    const list = $('addr-suggest');
+    if (list.hidden) return;
+    list.hidden = true;
+    list.textContent = '';
+    ac.items = [];
+    if (ac.input) { ac.input.setAttribute('aria-expanded', 'false'); ac.input.removeAttribute('aria-activedescendant'); }
+  }
+
+  function formatAddress(c) {
+    if (!c.name || c.name === c.email) return c.email;
+    const name = /[,;<>@"]/.test(c.name) ? '"' + c.name.replace(/"/g, '') + '"' : c.name;
+    return name + ' <' + c.email + '>';
+  }
+
+  function pickSuggest(i) {
+    const c = ac.items[i];
+    const input = ac.input;
+    if (!c || !input) return;
+    const v = input.value;
+    const head = v.slice(0, ac.start).replace(/\s*$/, '');
+    const tail = v.slice(ac.end).replace(/^[,;]?\s*/, '');
+    const insert = (head ? head + ' ' : '') + formatAddress(c) + ', ';
+    input.value = insert + tail;
+    input.setSelectionRange(insert.length, insert.length);
+    hideSuggest();
+    input.dispatchEvent(new Event('input', { bubbles: true }));
+    hideSuggest();
+  }
+
+  function onAddrKeyDown(e) {
+    const open = !$('addr-suggest').hidden && ac.items.length;
+    if (!open) return;
+    if (e.key === 'ArrowDown' || e.key === 'ArrowUp') {
+      e.preventDefault();
+      ac.index = (ac.index + (e.key === 'ArrowDown' ? 1 : -1) + ac.items.length) % ac.items.length;
+      markSuggest();
+    } else if (e.key === 'Enter' || e.key === 'Tab' || e.key === ',') {
+      if (e.key === ',' && !ac.items.length) return;
+      e.preventDefault();
+      pickSuggest(ac.index);
+    } else if (e.key === 'Escape') {
+      e.preventDefault();
+      e.stopPropagation();
+      hideSuggest();
+    }
+  }
+
+  function wireEditor() {
+    document.execCommand('defaultParagraphSeparator', false, 'div');
+    buildFmtBar();
+    const b = bodyEl();
+    b.addEventListener('keydown', onEditorKeyDown);
+    b.addEventListener('paste', onEditorPaste);
+    b.addEventListener('input', (e) => { if (!e.isComposing) scheduleSuggestion(); });
+    b.addEventListener('mousedown', () => { cancelSuggestion(); });
+    b.addEventListener('blur', () => { saveSelection(); cancelSuggestion(); });
+    b.addEventListener('drop', (e) => {
+      const html = e.dataTransfer && e.dataTransfer.getData('text/html');
+      if (!html) return;
+      e.preventDefault();
+      document.execCommand('insertHTML', false, sanitizeHtml(html));
+    });
+    document.addEventListener('selectionchange', () => {
+      if (document.activeElement === b) { saveSelection(); updateFmtState(); }
+    });
+    $('compose-fmt').addEventListener('click', () => {
+      const bar = $('fmt-bar');
+      bar.hidden = !bar.hidden;
+      $('compose-fmt').setAttribute('aria-pressed', String(!bar.hidden));
+      try { localStorage.setItem('roost.fmtBar', bar.hidden ? 'off' : 'on'); } catch { /* ignore */ }
+    });
+    try {
+      if (localStorage.getItem('roost.fmtBar') === 'off') { $('fmt-bar').hidden = true; $('compose-fmt').setAttribute('aria-pressed', 'false'); }
+    } catch { /* ignore */ }
+    $('compose-quote-toggle').addEventListener('click', () => {
+      const q = $('compose-quote');
+      q.hidden = !q.hidden;
+      $('compose-quote-toggle').setAttribute('aria-expanded', String(!q.hidden));
+      $('compose-quote-toggle').title = q.hidden ? 'Show trimmed content' : 'Hide trimmed content';
+    });
+    for (const id of ['compose-to', 'compose-cc', 'compose-bcc']) {
+      const input = $(id);
+      input.setAttribute('role', 'combobox');
+      input.setAttribute('aria-autocomplete', 'list');
+      input.setAttribute('aria-controls', 'addr-suggest');
+      input.setAttribute('aria-expanded', 'false');
+      input.addEventListener('focus', () => { ac.input = input; loadContacts(); });
+      input.addEventListener('input', () => updateSuggest(input));
+      input.addEventListener('keydown', onAddrKeyDown);
+      input.addEventListener('blur', () => setTimeout(() => { if (document.activeElement !== input) hideSuggest(); }, 0));
+    }
+    document.addEventListener('mousedown', (e) => {
+      const pop = $('fmt-pop');
+      if (!pop.hidden && !pop.contains(e.target) && !e.target.closest('.fmt-btn[aria-expanded="true"]')) closeFmtPop();
+    }, true);
+  }
+
+  // ---------------------------------------------------------------------------
   // Compose
   // ---------------------------------------------------------------------------
 
@@ -1441,14 +2265,27 @@
       ai: { seq: 0, busy: false, mode: null },
     };
     closeAiPanel(true);
+    cancelSuggestion();
+    closeFmtPop();
+    hideSuggest();
     state.compose = c;
     $('compose-title').textContent = { new: 'New message', reply: 'Reply', replyAll: 'Reply all', forward: 'Forward' }[c.mode] || 'New message';
     $('compose-to').value = opts.to || '';
     $('compose-cc').value = opts.cc || '';
     $('compose-bcc').value = '';
     $('compose-subject').value = opts.subject || '';
-    $('compose-body').value = opts.body || '';
-    $('compose-body').readOnly = false;
+    const full = String(opts.body || '');
+    const own = c.quote && full.endsWith(c.quote) ? full.slice(0, full.length - c.quote.length) : full;
+    const init = String(c.initialBody || '');
+    c.initialOwn = (c.quote && init.endsWith(c.quote) ? init.slice(0, init.length - c.quote.length) : init).trim();
+    setBodyText(own.replace(/\s+$/, ''));
+    bodyEl().contentEditable = 'true';
+    $('compose-quote').textContent = c.quote;
+    $('compose-quote').contentEditable = 'plaintext-only';
+    $('compose-quote').hidden = c.mode !== 'forward';
+    $('compose-quote-toggle').hidden = !c.quote;
+    $('compose-quote-toggle').setAttribute('aria-expanded', String(c.mode === 'forward'));
+    updateSmartButton();
     const showCc = !!opts.cc;
     $('compose-cc-row').hidden = !showCc;
     $('compose-bcc-row').hidden = !showCc;
@@ -1461,9 +2298,8 @@
     closeDrawer();
     const focusEl = !opts.to ? $('compose-to') : $('compose-body');
     focusEl.focus();
-    if (focusEl === $('compose-body')) {
-      const at = opts.cursorAt || 0;
-      focusEl.setSelectionRange(at, at);
+    if (focusEl === bodyEl()) {
+      placeCaretAtEnd(focusEl);
       focusEl.scrollTop = 0;
     }
   }
@@ -1471,13 +2307,16 @@
   function composeDirty() {
     const c = state.compose;
     if (!c) return false;
-    return $('compose-body').value !== c.initialBody || c.attachments.length > 0;
+    return bodyText().trim() !== (c.initialOwn || '') || c.attachments.length > 0 || $('compose-quote').textContent !== c.quote;
   }
 
   function closeComposeNow() {
     closeAiPanel(true);
+    cancelSuggestion();
+    closeFmtPop();
+    hideSuggest();
     state.compose = null;
-    $('compose-body').readOnly = false;
+    bodyEl().contentEditable = 'true';
     $('compose').hidden = true;
     $('screen-mail').classList.remove('composing');
   }
@@ -1537,12 +2376,16 @@
     const sendBtn = $('compose-send');
     sendBtn.disabled = true;
     sendBtn.lastChild.textContent = ' Sending…';
+    cancelSuggestion();
+    const quote = $('compose-quote').textContent.replace(/\s+$/, '');
+    const own = bodyText();
     const args = {
       to,
       cc: $('compose-cc').value.trim(),
       bcc: $('compose-bcc').value.trim(),
       subject: $('compose-subject').value,
-      body: $('compose-body').value,
+      body: own + (quote ? '\n\n' + quote : ''),
+      html: '<div dir="ltr">' + bodyHtml() + '</div>' + (quote ? '<br>' + quoteToHtml(quote) : ''),
       attachments: c.attachments.map((f) => ({ path: f.path })),
     };
     if (c.threadId) args.threadId = c.threadId;
@@ -1558,6 +2401,7 @@
       err.hidden = false;
       return;
     }
+    rememberRecipients(args.to, args.cc, args.bcc);
     closeComposeNow();
     toast('Sent');
     if (c.threadId && state.openId === c.threadId) openThread(c.threadId, { quiet: true });
@@ -1674,6 +2518,7 @@
   }
 
   function onAiStatusChanged() {
+    updateSmartButton();
     const c = state.compose;
     if (c && !$('ai-panel').hidden && !c.ai.busy) {
       // Panel open: show the right view for the new status.
@@ -1703,24 +2548,18 @@
 
   // ---- Compose body: the user's own text vs the quoted part ---------------
 
+  // The text the user writes (the quoted / forwarded part lives in #compose-quote).
   function composeOwnText() {
-    const c = state.compose;
-    const v = $('compose-body').value;
-    if (c && c.quote && v.endsWith(c.quote)) return v.slice(0, v.length - c.quote.length).trim();
-    return v.trim();
+    return bodyText().trim();
   }
 
   function setComposeOwnText(text) {
-    const c = state.compose;
-    const v = $('compose-body').value;
-    const clean = String(text || '').replace(/\s+$/, '');
-    const keepQuote = c && c.quote && v.endsWith(c.quote);
-    const body = $('compose-body');
-    body.value = keepQuote ? clean + '\n\n' + c.quote : clean;
-    body.dispatchEvent(new Event('input', { bubbles: true }));
+    const body = bodyEl();
+    setBodyText(String(text || '').replace(/\s+$/, ''));
     body.focus();
-    body.setSelectionRange(clean.length, clean.length);
+    placeCaretAtEnd(body);
     body.scrollTop = 0;
+    updateAiButton();
   }
 
   function composeFields() {
@@ -1729,7 +2568,7 @@
       cc: $('compose-cc').value.trim(),
       bcc: $('compose-bcc').value.trim(),
       subject: $('compose-subject').value,
-      body: $('compose-body').value,
+      body: (() => { const q = $('compose-quote').textContent.replace(/\s+$/, ''); return bodyText() + (q ? '\n\n' + q : ''); })(),
     };
   }
 
@@ -1923,7 +2762,8 @@
 
   function setAiBusy(c, on) {
     c.ai.busy = on;
-    $('compose-body').readOnly = on;
+    if (on) cancelSuggestion();
+    bodyEl().contentEditable = on ? 'false' : 'true';
     $('compose-send').disabled = on || c.sending;
     updateAiButton();
   }
@@ -1976,17 +2816,18 @@
       return;
     }
 
-    const prevBody = $('compose-body').value;
+    const prevBody = bodyEl().innerHTML;
     setComposeOwnText(text);
     closeAiPanel(true);
     toast(ui.done || 'Done', {
       action: 'Undo',
       onAction: () => {
         if (state.compose !== c) return;
-        const body = $('compose-body');
-        body.value = prevBody;
-        body.dispatchEvent(new Event('input', { bubbles: true }));
+        const body = bodyEl();
+        body.innerHTML = prevBody;
         body.focus();
+        placeCaretAtEnd(body);
+        updateAiButton();
       },
     });
   }
@@ -2168,6 +3009,8 @@
   function onKeyDown(e) {
     if (currentScreen !== 'screen-mail') return;
     if (e.key === 'Escape') {
+      if (!$('fmt-pop').hidden) { e.preventDefault(); closeFmtPop(); return; }
+      if (sc.ghost) { e.preventDefault(); cancelSuggestion(); return; }
       if (!$('ai-panel').hidden) { e.preventDefault(); escapeAiPanel(); return; }
       if (state.compose) { e.preventDefault(); discardCompose(); return; }
       if ($('screen-mail').classList.contains('drawer-open')) { closeDrawer(); return; }
@@ -2258,6 +3101,7 @@
 
   function wire() {
     hydrateIcons(document);
+    wireEditor();
 
     // Setup
     document.querySelectorAll('[data-url]').forEach((b) => {

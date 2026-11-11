@@ -111,22 +111,40 @@ function encodeHeaderValue(v) {
   const s = String(v || '').replace(/[\r\n]+/g, ' ');
   return /[^\x20-\x7E]/.test(s) ? `=?UTF-8?B?${Buffer.from(s, 'utf8').toString('base64')}?=` : s;
 }
+// "Zoë Ann <z@x.com>, b@x.com": encode non-ASCII display names (RFC 2047), keep the addresses as typed.
+function encodeAddressList(value) {
+  const v = String(value || '').replace(/[\r\n]+/g, ' ').trim();
+  if (!v || !/[^\x20-\x7E]/.test(v)) return v;
+  return splitAddresses(v).map((tok) => {
+    const m = tok.match(/^\s*"?([^"<]*?)"?\s*<([^>]+)>\s*$/);
+    if (!m || !/[^\x20-\x7E]/.test(m[1])) return tok;
+    return `${encodeHeaderValue(m[1].trim())} <${m[2].trim()}>`;
+  }).join(', ');
+}
 const wrap76 = (b64) => b64.replace(/.{1,76}/g, '$&\r\n').trimEnd();
 
-// Build an RFC 2822 message (plain text body, optional attachments).
-function buildRawMessage({ from, to, cc, bcc, subject, body, inReplyTo, references, attachments = [] }) {
+// Build an RFC 2822 message (plain text body, optional HTML body, optional attachments).
+function buildRawMessage({ from, to, cc, bcc, subject, body, html, inReplyTo, references, attachments = [] }) {
   const lines = [];
   const push = (name, value) => { if (value) lines.push(`${name}: ${value}`); };
   push('From', from);
-  push('To', to);
-  push('Cc', cc);
-  push('Bcc', bcc);
+  push('To', encodeAddressList(to));
+  push('Cc', encodeAddressList(cc));
+  push('Bcc', encodeAddressList(bcc));
   push('Subject', encodeHeaderValue(subject || ''));
   push('In-Reply-To', inReplyTo);
   push('References', references);
   push('MIME-Version', '1.0');
-  const textPart = ['Content-Type: text/plain; charset="UTF-8"', 'Content-Transfer-Encoding: base64', '',
+  const plainPart = ['Content-Type: text/plain; charset="UTF-8"', 'Content-Transfer-Encoding: base64', '',
     wrap76(Buffer.from(String(body || '').replace(/\r?\n/g, '\r\n'), 'utf8').toString('base64'))];
+  let textPart = plainPart;
+  if (html) {
+    // Rich text: send both versions so every mail app can show it.
+    const alt = `roost_alt_${crypto.randomBytes(12).toString('hex')}`;
+    textPart = [`Content-Type: multipart/alternative; boundary="${alt}"`, '', `--${alt}`, ...plainPart,
+      `--${alt}`, 'Content-Type: text/html; charset="UTF-8"', 'Content-Transfer-Encoding: base64', '',
+      wrap76(Buffer.from(String(html), 'utf8').toString('base64')), `--${alt}--`, ''];
+  }
   if (!attachments.length) return [...lines, ...textPart].join('\r\n');
   const boundary = `roost_${crypto.randomBytes(12).toString('hex')}`;
   const out = [...lines, `Content-Type: multipart/mixed; boundary="${boundary}"`, '', `--${boundary}`, ...textPart];
@@ -522,7 +540,7 @@ class GmailAccount extends GoogleAccount {
     return {};
   }
 
-  async send({ to, cc, bcc, subject, body, threadId, inReplyTo, references, attachments = [] }) {
+  async send({ to, cc, bcc, subject, body, html, threadId, inReplyTo, references, attachments = [] }) {
     if (!String(to || '').trim() && !String(cc || '').trim() && !String(bcc || '').trim()) throw new ApiError('Add at least one recipient.');
     const acc = this.account();
     const files = [];
@@ -533,9 +551,46 @@ class GmailAccount extends GoogleAccount {
       files.push({ filename: path.basename(a.path), mimeType: mimeOf(a.path), data });
     }
     if (total > MAX_SEND_BYTES) throw new ApiError('Attachments are too big (over 20 MB). Share large files with a Google Drive link instead.');
-    const raw = buildRawMessage({ from: acc?.email, to, cc, bcc, subject, body, inReplyTo, references, attachments: files });
+    const raw = buildRawMessage({ from: acc?.email, to, cc, bcc, subject, body, html: html ? String(html) : '', inReplyTo, references, attachments: files });
     const res = await this.api('POST', '/gmail/v1/users/me/messages/send', { body: { raw: b64url(Buffer.from(raw, 'utf8')), ...(threadId ? { threadId } : {}) } });
     return { id: res.id };
+  }
+
+  // Address book for recipient autofill: people you wrote to (most weight) and people who wrote to you.
+  // Built from your own mail headers, so it needs no extra Google permission. Cached for 30 minutes.
+  async listContacts({ refresh } = {}) {
+    if (!refresh && this.contactsCache && Date.now() - this.contactsCache.at < 30 * 60 * 1000) return { contacts: this.contactsCache.list };
+    const me = String(this.account()?.email || '').toLowerCase();
+    const book = new Map();
+    const add = (value, weight, ts) => {
+      for (const token of splitAddresses(value)) {
+        const { name, email } = parseAddress(token);
+        const e = String(email || '').trim();
+        if (!/^[^\s@<>]+@[^\s@<>]+\.[^\s@<>]+$/.test(e)) continue;
+        const key = e.toLowerCase();
+        if (key === me || /(^|[.+-])(no-?reply|do-?not-?reply|mailer-daemon|notifications?)([.+-]|@)/i.test(key)) continue;
+        const cur = book.get(key) || { email: e, name: '', score: 0, last: 0 };
+        if (name && name !== e && !cur.name) cur.name = name.replace(/^['"]|['"]$/g, '');
+        cur.score += weight;
+        cur.last = Math.max(cur.last, ts || 0);
+        book.set(key, cur);
+      }
+    };
+    const scan = async (labelId, max, headers, weight) => {
+      const list = await this.api('GET', '/gmail/v1/users/me/messages', { query: { labelIds: [labelId], maxResults: max } }).catch(() => ({}));
+      await mapLimit(list.messages || [], 10, async (m) => {
+        const meta = await this.api('GET', `/gmail/v1/users/me/messages/${m.id}`, { query: { format: 'metadata', metadataHeaders: headers } }).catch(() => null);
+        if (!meta) return;
+        const h = meta.payload?.headers || [];
+        const ts = Number(meta.internalDate) || 0;
+        for (const name of headers) add(header(h, name), weight, ts);
+      });
+    };
+    await Promise.all([scan('SENT', 150, ['To', 'Cc', 'Bcc'], 3), scan('INBOX', 100, ['From', 'Cc'], 1)]);
+    const list = [...book.values()].sort((a, b) => b.score - a.score || b.last - a.last).slice(0, 500)
+      .map(({ email, name, score }) => ({ email, name, score }));
+    this.contactsCache = { at: Date.now(), list };
+    return { contacts: list };
   }
 
   async pickAttachments() {
@@ -641,7 +696,7 @@ function decodeHtmlEntities(s) {
 }
 
 const CONTRACT = ['getStatus', 'saveClientConfig', 'signIn', 'signOut', 'listLabels', 'listThreads', 'getThread',
-  'modifyThread', 'trashThread', 'send', 'pickAttachments', 'downloadAttachment', 'openExternal'];
+  'modifyThread', 'trashThread', 'send', 'listContacts', 'pickAttachments', 'downloadAttachment', 'openExternal'];
 
 module.exports = {
   GoogleAccount, GmailAccount, GmailStore, ApiError, CONTRACT, ENDPOINTS, mapLimit,

@@ -39,7 +39,8 @@ All on your Mac, in `~/Library/Application Support/Roost/`.
 ## What leaves your Mac
 
 - Calls to Google (Gmail API, Calendar API, sign-in) with your own OAuth client.
-- Calls to Anthropic only if you add a Claude key and click an AI button. The email text you ask about is sent with that request.
+- Calls to Anthropic only if you add a Claude key. The email text you ask about is sent when you click an AI button. While Smart Compose is on (✨ on the formatting bar), the draft you are typing, its To and Subject, and the conversation you reply to are sent each time you pause typing. Turn it off to stop this.
+- Recipient autofill reads only the From, To, Cc and Bcc headers of your recent Sent (150) and Inbox (100) emails, through the Gmail permission Roost already has. The list stays in memory and is not saved to disk.
 - The messenger apps (WhatsApp, Slack and so on) talk to their own services, like in a browser.
 
 Roost has no server of its own. It sends no analytics.

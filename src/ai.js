@@ -13,7 +13,7 @@ const STYLES = {
   proofread: 'Proofread: only fix spelling, grammar and punctuation. Change nothing else.',
   bullets: 'Rewrite the main points as a short intro line plus "- " bullet points.',
 };
-const TASKS = new Set(['write', 'rewrite', 'replies', 'summarize', 'subject']);
+const TASKS = new Set(['write', 'rewrite', 'replies', 'summarize', 'subject', 'complete']);
 
 const SYSTEM = `You help a person write email in their mail app. Write as the person (first person), in plain text.
 Never add a subject line, notes, quotes around the text, or explanations: output only what was asked for.
@@ -49,6 +49,13 @@ function buildPrompt({ task, prompt, draft, style, to, subject, thread }) {
     case 'subject':
       if (!String(draft || '').trim()) throw new AiError('Write something first.');
       return `${draftBlock}\n\nWrite one short subject line for this email (max 8 words). Output only the subject line.`;
+    case 'complete':
+      // Smart Compose: a few words that continue the draft at the cursor (shown as gray text, Tab to accept).
+      if (!String(draft || '').trim()) throw new AiError('Write something first.');
+      return [head, `My email so far (it stops where my cursor is):\n<draft>\n${clip(draft, 6000).slice(-3000)}\n</draft>`,
+        `Predict how I continue, right where the draft stops. Output only the next words: at most 10 words, never past the end of the current sentence.
+If the draft stops in the middle of a word, start by finishing that word (no leading space). Otherwise start with one space.
+Never repeat text from the draft. If you are not confident what comes next, output exactly: <none>`].filter(Boolean).join('\n\n');
     case 'replies':
       if (!ctx) throw new AiError('No conversation.');
       return `${ctx}\n\nSuggest 3 different short replies I could send to the last message (each max 12 words, plain sentences).
@@ -66,9 +73,35 @@ function parseReplies(text) {
     .filter(Boolean).slice(0, 3);
 }
 
+// Smart Compose answer: one line, no quotes, no "<none>", no repeat of the draft. Keeps a leading space.
+function cleanCompletion(raw, draft) {
+  let t = String(raw || '').split(/\r?\n/).find((l) => l.trim()) || '';
+  if (/<none>/i.test(t)) return '';
+  t = t.replace(/^(\s?)["“]/, '$1').replace(/["”]\s*$/, '').replace(/\s+$/, '');
+  const d = String(draft || '');
+  let lead = /^\s/.test(t) && !/\s$/.test(d) ? ' ' : '';
+  let body = t.trim();
+  // The model sometimes starts by repeating the end of the draft: drop the longest repeated word run.
+  const dt = d.trimEnd();
+  const lower = body.toLowerCase();
+  for (let k = Math.min(dt.length, 80); k >= 4; k--) {
+    const suffix = dt.slice(-k);
+    if (/\w/.test(dt[dt.length - k - 1] || '') || !lower.startsWith(suffix.toLowerCase())) continue;
+    if (k === body.length || /\W/.test(body[k] || ' ')) {
+      body = body.slice(k).trim();
+      if (!/\s$/.test(d) && /^\w/.test(body)) lead = ' ';
+      break;
+    }
+  }
+  const words = body.split(/\s+/).filter(Boolean);
+  if (!words.length) return '';
+  return lead + words.slice(0, 12).join(' ');
+}
+
 function fakeAnswer(a) {
   if (a.task === 'replies') return { replies: ['Thanks, got it!', 'Sounds good to me.', 'Let me check and get back to you.'] };
   if (a.task === 'summarize') return { text: `- Summary of: ${a.thread?.subject || ''}` };
+  if (a.task === 'complete') return { text: /\s$/.test(a.draft) ? 'thanks for your help.' : ' and thanks for your help.' };
   return { text: `AI ${a.task}${a.style ? ` ${a.style}` : ''}: ${a.prompt || a.draft || ''}` };
 }
 
@@ -99,11 +132,13 @@ async function runAiTask(args, { getKey, fake = !!process.env.ROOST_AI_FAKE, bas
     throw err;
   }
   if (msg.stop_reason === 'refusal') throw new AiError('Claude could not help with this one.');
-  const text = msg.content.filter((b) => b.type === 'text').map((b) => b.text).join('').trim();
+  const raw = msg.content.filter((b) => b.type === 'text').map((b) => b.text).join('');
+  if (a.task === 'complete') return { text: cleanCompletion(raw, a.draft) };
+  const text = raw.trim();
   if (!text) throw new AiError('Claude gave no answer. Try again.');
   if (a.task === 'replies') return { replies: parseReplies(text) };
   if (a.task === 'subject') return { text: text.split('\n')[0].replace(/^subject:\s*/i, '').replace(/^["“]|["”]$/g, '').trim() };
   return { text };
 }
 
-module.exports = { runAiTask, buildPrompt, parseReplies, STYLES, MODEL, AiError };
+module.exports = { runAiTask, buildPrompt, parseReplies, cleanCompletion, STYLES, MODEL, AiError };
