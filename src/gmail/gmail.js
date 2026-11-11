@@ -67,6 +67,7 @@
     nextPageToken: null,
     pagesLoaded: 0,
     listLoading: false,
+    reloadAfterLoad: false, // an Undo came in during a list load: refresh when it ends
     listError: null,
     cursor: -1,           // keyboard cursor index in state.threads
     openId: null,         // thread shown in reader
@@ -116,6 +117,18 @@
     b.setAttribute('aria-label', label);
     b.title = opts.title || label;
     b.appendChild(icon(name, opts.filled));
+    b.addEventListener('click', onClick);
+    return b;
+  }
+
+  // Toolbar button with an icon and a short word. The full name (with its key) is the tooltip and aria-label.
+  function labeledButton(name, word, label, onClick, cls) {
+    const b = el('button', 'icon-btn tb-btn' + (cls ? ' ' + cls : ''));
+    b.type = 'button';
+    b.setAttribute('aria-label', label);
+    b.title = label;
+    b.appendChild(icon(name));
+    b.appendChild(el('span', 'tb-word', word));
     b.addEventListener('click', onClick);
     return b;
   }
@@ -288,7 +301,146 @@
     $('setup-error').hidden = true;
     $('setup-save').disabled = false;
     $('setup-cancel').hidden = !fromSignIn;
+    // "Change Google key": the project already exists, so go straight to the key step.
+    setWizardStep(fromSignIn ? WIZ_STEPS : loadWizardStep());
     showScreen('screen-setup');
+  }
+
+  // ----- setup wizard -----
+  const WIZ_STEPS = 4;
+  const WIZ_MINUTES_LEFT = [10, 8, 6, 3]; // rough time left at the start of each step
+  const WIZ_KEY = 'roost.gmailSetupStep';
+  let wizStep = 1;
+
+  function loadWizardStep() {
+    try { return Math.min(WIZ_STEPS, Math.max(1, Number(localStorage.getItem(WIZ_KEY)) || 1)); } catch { return 1; }
+  }
+
+  function setWizardStep(n) {
+    wizStep = Math.min(WIZ_STEPS, Math.max(1, Number(n) || 1));
+    try { localStorage.setItem(WIZ_KEY, String(wizStep)); } catch { /* storage off: start at step 1 next time */ }
+    document.querySelectorAll('#screen-setup .wiz-step').forEach((li) => {
+      const k = Number(li.dataset.step);
+      li.classList.toggle('done', k < wizStep);
+      li.classList.toggle('now', k === wizStep);
+      li.classList.toggle('todo', k > wizStep);
+      const head = li.querySelector('.wiz-head');
+      head.disabled = k > wizStep; // later steps open with "I did this"
+      head.setAttribute('aria-expanded', String(k === wizStep));
+      if (k === wizStep) head.setAttribute('aria-current', 'step'); else head.removeAttribute('aria-current');
+      li.querySelector('.wiz-dot').textContent = k < wizStep ? '✓' : String(k);
+    });
+    $('wiz-count').textContent = `Step ${wizStep} of ${WIZ_STEPS}`;
+    $('wiz-left').textContent = `about ${WIZ_MINUTES_LEFT[wizStep - 1]} min left`;
+    // A little head start on the bar: step 1 already shows some progress.
+    $('wiz-bar').style.width = Math.round(((wizStep - 0.5) / WIZ_STEPS) * 100) + '%';
+  }
+
+  // Forgiving input: trim spaces, quotes and a stray "Client ID:" label.
+  function cleanKeyValue(v) {
+    return String(v || '').trim().replace(/^(client[ _-]?(id|secret)\s*[:=]\s*)/i, '').replace(/^["'`]+|["'`,]+$/g, '').trim();
+  }
+
+  // Reads Google's client_secret_….json (Desktop app: "installed"; a Web app key: "web").
+  function parseClientJson(text) {
+    let o;
+    try { o = JSON.parse(text); } catch { return { error: 'This file is not a Google key file. Download the JSON again from the Clients page.' }; }
+    const c = (o && (o.installed || o.web)) || o || {};
+    const clientId = cleanKeyValue(c.client_id);
+    const clientSecret = cleanKeyValue(c.client_secret);
+    if (!clientId || !clientSecret) return { error: 'This file has no Client ID and secret. Use the file from “Download JSON” on the Clients page.' };
+    return { clientId, clientSecret, web: !!(o && o.web && !o.installed) };
+  }
+
+  function checkClientId(v) {
+    if (!v) return null;
+    return /^[0-9]+-[a-z0-9_-]+\.apps\.googleusercontent\.com$/i.test(v)
+      ? { ok: true, text: '✓ Looks right' }
+      : { ok: false, text: 'A Client ID ends in .apps.googleusercontent.com. Copy it again from the Clients page.' };
+  }
+
+  function checkClientSecret(v) {
+    if (!v) return null;
+    return /^GOCSPX-\S+$/.test(v)
+      ? { ok: true, text: '✓ Looks right' }
+      : { ok: false, text: 'Secrets from Google usually start with GOCSPX-. Check that you copied the whole value.' };
+  }
+
+  function showFieldMsg(id, res) {
+    const m = $(id);
+    m.hidden = !res;
+    if (!res) return;
+    m.textContent = res.text;
+    m.classList.toggle('ok', !!res.ok);
+    m.classList.toggle('bad', !res.ok);
+  }
+
+  function validateSetupFields() {
+    showFieldMsg('setup-id-msg', checkClientId(cleanKeyValue($('setup-client-id').value)));
+    showFieldMsg('setup-secret-msg', checkClientSecret(cleanKeyValue($('setup-client-secret').value)));
+  }
+
+  function showKeyFileMsg(text, ok) {
+    const msg = $('setup-file-msg');
+    msg.hidden = false;
+    msg.classList.toggle('bad', !ok);
+    msg.classList.toggle('ok', !!ok);
+    msg.textContent = text;
+  }
+
+  function fillFromKeyFile(text, name) {
+    const r = parseClientJson(text);
+    if (r.error) { showKeyFileMsg(r.error, false); return; }
+    // A Web app key fails at sign-in (redirect_uri_mismatch), so do not fill the fields with it.
+    if (r.web) { showKeyFileMsg('This key is for a Web app. Roost needs a Desktop app key: create a new client with type Desktop app.', false); return; }
+    $('setup-client-id').value = r.clientId;
+    $('setup-client-secret').value = r.clientSecret;
+    validateSetupFields();
+    showKeyFileMsg(`✓ Filled in from ${name || 'the key file'}. Click Save and continue.`, true);
+    $('setup-save').focus();
+  }
+
+  function readKeyFile(file) {
+    if (!file) return;
+    if (file.size > 64 * 1024) { showKeyFileMsg('This file is too big to be a Google key file. Use the small JSON file from Download JSON.', false); return; }
+    const fr = new FileReader();
+    fr.onload = () => fillFromKeyFile(String(fr.result || ''), file.name);
+    fr.onerror = () => fillFromKeyFile('', file.name);
+    fr.readAsText(file);
+  }
+
+  function wireSetupWizard() {
+    document.querySelectorAll('#screen-setup [data-wiz-next]').forEach((b) => b.addEventListener('click', () => {
+      setWizardStep(wizStep + 1);
+      const now = document.querySelector('#screen-setup .wiz-step.now .wiz-body .btn, #screen-setup .wiz-step.now input');
+      if (now) now.focus();
+    }));
+    document.querySelectorAll('#screen-setup [data-wiz-go]').forEach((b) => b.addEventListener('click', () => {
+      const k = Number(b.getAttribute('data-wiz-go'));
+      if (k <= wizStep) setWizardStep(k);
+    }));
+    $('setup-file').addEventListener('change', (e) => { readKeyFile(e.target.files && e.target.files[0]); e.target.value = ''; });
+    const zone = $('setup-drop');
+    const card = document.querySelector('#screen-setup .setup-card');
+    card.addEventListener('dragover', (e) => { e.preventDefault(); zone.classList.add('over'); });
+    card.addEventListener('dragleave', (e) => { if (!card.contains(e.relatedTarget)) zone.classList.remove('over'); });
+    card.addEventListener('drop', (e) => {
+      e.preventDefault();
+      zone.classList.remove('over');
+      const f = e.dataTransfer && e.dataTransfer.files && e.dataTransfer.files[0];
+      if (!f) return;
+      setWizardStep(WIZ_STEPS);
+      readKeyFile(f);
+    });
+    for (const id of ['setup-client-id', 'setup-client-secret']) {
+      const inp = $(id);
+      inp.addEventListener('input', validateSetupFields);
+      // Pasting the whole JSON file into a field works too.
+      inp.addEventListener('paste', (e) => {
+        const text = e.clipboardData && e.clipboardData.getData('text');
+        if (text && /^\s*\{[\s\S]*client_id[\s\S]*\}\s*$/.test(text)) { e.preventDefault(); fillFromKeyFile(text, 'the pasted key'); }
+      });
+    }
   }
 
   function showSignIn(error) {
@@ -310,7 +462,9 @@
     }
     if (!r.configured) return showSetup(false);
     if (!r.signedIn) return showSignIn();
+    state.signedInAt = r.signedInAt || null;
     enterMail(r.email);
+    updateReauthBanner();
   }
 
   // ---------------------------------------------------------------------------
@@ -319,12 +473,20 @@
 
   async function onSaveSetup(e) {
     e.preventDefault();
-    const clientId = $('setup-client-id').value.trim();
-    const clientSecret = $('setup-client-secret').value.trim();
+    const clientId = cleanKeyValue($('setup-client-id').value);
+    const clientSecret = cleanKeyValue($('setup-client-secret').value);
     const err = $('setup-error');
+    validateSetupFields();
     if (!clientId || !clientSecret) {
-      err.textContent = 'Please paste both the Client ID and the Client secret.';
+      err.textContent = 'Drop the key file, or paste both the Client ID and the Client secret.';
       err.hidden = false;
+      return;
+    }
+    const idCheck = checkClientId(clientId);
+    if (idCheck && !idCheck.ok) {
+      err.textContent = idCheck.text;
+      err.hidden = false;
+      $('setup-client-id').focus();
       return;
     }
     err.hidden = true;
@@ -336,6 +498,7 @@
       return;
     }
     $('setup-client-secret').value = '';
+    try { localStorage.removeItem(WIZ_KEY); } catch { /* ignore */ }
     init();
   }
 
@@ -384,6 +547,57 @@
   // ---------------------------------------------------------------------------
   // Mail screen
   // ---------------------------------------------------------------------------
+
+  // ----- Heads-up before Google ends the sign-in (keys in Testing mode last 7 days) -----
+  const DAY_MS = 24 * 3600 * 1000;
+  const REAUTH_AFTER_MS = 7 * DAY_MS;
+  const REAUTH_WARN_MS = 1.5 * DAY_MS; // show the banner in the last day and a half
+
+  function reauthLaterKey() { return 'roost.reauthLater.' + (state.email || ''); }
+  // How many times "Later" was clicked for this sign-in. After 2, the banner stays away (a published key never ends).
+  function reauthLaterCountKey() { return 'roost.reauthLaterCount.' + (state.email || ''); }
+  const REAUTH_LATER_MAX = 2;
+
+  function reauthLaterCount() {
+    try {
+      const v = JSON.parse(localStorage.getItem(reauthLaterCountKey()) || 'null');
+      return v && v.at === (Number(state.signedInAt) || 0) ? Number(v.n) || 0 : 0;
+    } catch { return 0; }
+  }
+
+  function updateReauthBanner() {
+    const banner = $('reauth-banner');
+    const at = Number(state.signedInAt) || 0;
+    const left = at ? at + REAUTH_AFTER_MS - Date.now() : Infinity;
+    let snoozed = false;
+    try { snoozed = Number(localStorage.getItem(reauthLaterKey()) || 0) > Date.now(); } catch { /* storage off */ }
+    if (reauthLaterCount() >= REAUTH_LATER_MAX) snoozed = true;
+    banner.hidden = !(left < REAUTH_WARN_MS) || snoozed || currentScreen !== 'screen-mail';
+    if (banner.hidden) return;
+    const when = left <= 0 ? 'soon' : left < 12 * 3600 * 1000 ? 'later today' : 'tomorrow';
+    $('reauth-text').textContent = `If your Google key is in Testing mode, Google will ask you to sign in to ${state.email || 'this inbox'} again ${when}. Sign in now to skip the break. It takes a few seconds.`;
+  }
+
+  async function reauthNow() {
+    const btn = $('reauth-now');
+    btn.disabled = true;
+    toast('Finish signing in in your browser…');
+    const r = await call('signIn');
+    btn.disabled = false;
+    if (!r.ok) return toast(errText(r), { error: true });
+    const st = await call('getStatus');
+    if (st && st.ok) state.signedInAt = st.signedInAt || Date.now();
+    updateReauthBanner();
+    toast('Signed in again. Your Gmail stays connected.');
+  }
+
+  function reauthLater() {
+    try {
+      localStorage.setItem(reauthLaterKey(), String(Date.now() + 8 * 3600 * 1000));
+      localStorage.setItem(reauthLaterCountKey(), JSON.stringify({ at: Number(state.signedInAt) || 0, n: reauthLaterCount() + 1 }));
+    } catch { /* storage off */ }
+    $('reauth-banner').hidden = true;
+  }
 
   function enterMail(email) {
     const changedAccount = state.email && email && state.email !== email;
@@ -547,6 +761,19 @@
       b.addEventListener('click', () => selectCategory(c.id));
       nav.appendChild(b);
     }
+    const on = nav.querySelector('.cat-tab.on');
+    if (on) on.scrollIntoView({ block: 'nearest', inline: 'nearest' });
+    updateTabOverflow();
+  }
+
+  // Tabs that do not fit: fade the cut edge and show a › button, so the row does not look broken.
+  function updateTabOverflow() {
+    const nav = $('cat-tabs');
+    const wrap = $('cat-wrap');
+    const more = !nav.hidden && nav.scrollLeft + nav.clientWidth < nav.scrollWidth - 2;
+    wrap.classList.toggle('more-right', more);
+    wrap.classList.toggle('more-left', !nav.hidden && nav.scrollLeft > 2);
+    $('cat-more').hidden = !more;
   }
 
   function selectCategory(id) {
@@ -588,6 +815,7 @@
     if (!r.ok) {
       state.listError = errText(r);
       renderList();
+      reloadIfAsked();
       return;
     }
     state.threads = Array.isArray(r.threads) ? r.threads.filter(Boolean) : [];
@@ -596,6 +824,19 @@
     state.cursor = indexOfThread(state.openId);
     renderList();
     $('thread-list').scrollTop = 0;
+    reloadIfAsked();
+  }
+
+  // An Undo during a list load: the load may miss the change, so refresh once it is done.
+  function refreshAfterUndo() {
+    if (state.listLoading) state.reloadAfterLoad = true;
+    else refreshListQuietly();
+  }
+
+  function reloadIfAsked() {
+    if (!state.reloadAfterLoad) return;
+    state.reloadAfterLoad = false;
+    refreshListQuietly();
   }
 
   async function loadMore(btn) {
@@ -679,6 +920,7 @@
     }
     if (!state.threads.length) {
       const tabName = inTabs() && (CATEGORIES.find((c) => c.id === state.category) || {}).name;
+      if (inTabs() || (state.labelId === 'INBOX' && !state.q)) { list.appendChild(inboxDoneEl(tabName || 'Inbox')); return; }
       const msg = state.q ? 'No messages match your search.' : 'No conversations in ' + (tabName || labelName(state.labelId)) + '.';
       list.appendChild(el('div', 'list-state', msg));
       return;
@@ -812,6 +1054,82 @@
   // Reader
   // ---------------------------------------------------------------------------
 
+  // ----- "Inbox done": mark the end of the task, then show what comes next -----
+  // One count per account, so two inboxes do not share it.
+  function doneKey() { return 'roost.clearedToday.' + (state.email || ''); }
+  const DONE_LINES = [
+    'Nothing waiting for you here.',
+    'Enjoy the quiet.',
+    'Time for something else.',
+    'Nice and calm.',
+  ];
+
+  function todayKey() { const d = new Date(); return `${d.getFullYear()}-${d.getMonth() + 1}-${d.getDate()}`; }
+
+  function clearedToday() {
+    try {
+      const v = JSON.parse(localStorage.getItem(doneKey()) || 'null');
+      return v && v.day === todayKey() ? Number(v.n) || 0 : 0;
+    } catch { return 0; }
+  }
+
+  // Counts conversations taken out of the inbox (archive or delete) today, for the "All done" line.
+  // Returns true when it counted, so an Undo knows to take the count back.
+  function noteCleared(n) {
+    if (!(n > 0) || state.labelId !== 'INBOX') return false;
+    try { localStorage.setItem(doneKey(), JSON.stringify({ day: todayKey(), n: clearedToday() + n })); } catch { /* storage off */ }
+    return true;
+  }
+
+  // Undo of an archive or delete: take those conversations off today's count (never below 0).
+  function unnoteCleared(n) {
+    if (!(n > 0)) return;
+    try { localStorage.setItem(doneKey(), JSON.stringify({ day: todayKey(), n: Math.max(0, clearedToday() - n) })); } catch { /* storage off */ }
+  }
+
+  function fmtTime(ms) {
+    const d = new Date(ms);
+    const t = d.toLocaleTimeString([], { hour: 'numeric', minute: '2-digit' });
+    const today = new Date();
+    if (d.toDateString() === today.toDateString()) return t;
+    const tomorrow = new Date(today.getFullYear(), today.getMonth(), today.getDate() + 1);
+    return (d.toDateString() === tomorrow.toDateString() ? 'Tomorrow ' : d.toLocaleDateString([], { weekday: 'short' }) + ' ') + t;
+  }
+
+  function inboxDoneEl(where) {
+    const box = el('div', 'inbox-done');
+    box.setAttribute('role', 'status');
+    box.appendChild(el('div', 'done-mark', '🪺'));
+    box.appendChild(el('h2', 'done-title', `All done in ${where}`));
+    const n = clearedToday();
+    const line = n ? `You cleared ${n === 1 ? '1 conversation' : n + ' conversations'} today.` : DONE_LINES[new Date().getDate() % DONE_LINES.length];
+    box.appendChild(el('p', 'done-sub', line));
+    const agenda = el('div', 'done-agenda');
+    agenda.hidden = true;
+    box.appendChild(agenda);
+    const actions = el('div', 'done-actions');
+    if (inTabs() && state.category === 'primary') {
+      actions.appendChild(textButton(null, 'Look at Promotions', () => selectCategory('promotions')));
+    }
+    box.appendChild(actions);
+    call('upcomingEvents').then((r) => {
+      if (!r || !r.ok || !box.isConnected) return;
+      const evs = Array.isArray(r.events) ? r.events : [];
+      if (evs.length) {
+        agenda.appendChild(el('div', 'done-agenda-title', 'Coming up'));
+        for (const ev of evs) {
+          const row = el('div', 'done-event');
+          row.appendChild(el('span', 'done-time', fmtTime(ev.startMs)));
+          row.appendChild(el('span', 'done-what', ev.summary));
+          agenda.appendChild(row);
+        }
+        agenda.hidden = false;
+      }
+      if (r.hasCalendar) actions.appendChild(textButton(null, 'Open Calendar', () => call('openCalendar')));
+    });
+    return box;
+  }
+
   function renderReaderEmpty(text) {
     const r = $('reader');
     r.textContent = '';
@@ -929,21 +1247,19 @@
     bar.appendChild(iconButton('back', 'Back to list (u)', () => closeReader(), { cls: 'back-btn' }));
     const add = (b) => { if (disabled) b.disabled = true; bar.appendChild(b); return b; };
     const inInbox = threadInInbox(thread);
-    if (inInbox || disabled) add(iconButton('archive', 'Archive (e)', () => archiveOpen()));
-    else add(iconButton('inbox', 'Move to Inbox', () => moveOpenToInbox()));
-    add(iconButton('trash', 'Delete (#)', () => trashOpen()));
-    add(iconButton('unread', 'Mark as unread (⇧U)', () => markOpenUnread()));
+    // Main actions carry a word, not only an icon. Reply, Reply all and Forward live under the conversation.
+    if (inInbox || disabled) add(labeledButton('archive', 'Archive', 'Archive (e)', () => archiveOpen()));
+    else add(labeledButton('inbox', 'Move to Inbox', 'Move to Inbox', () => moveOpenToInbox()));
+    add(labeledButton('trash', 'Delete', 'Delete (#)', () => trashOpen()));
+    add(labeledButton('unread', 'Unread', 'Mark as unread (⇧U)', () => markOpenUnread()));
     const starred = !disabled && threadIsStarred(thread);
     add(iconButton('star', starred ? 'Unstar (s)' : 'Star (s)', () => toggleStar(thread.id), { cls: starred ? 'active' : '', filled: starred }));
-    add(iconButton('sparkle', 'Summarize this conversation', () => summarizeOpen(), { cls: 'ai-summarize-btn', title: 'Summarize (AI)' }));
     bar.appendChild(el('span', 'spacer'));
+    add(labeledButton('sparkle', 'Summary', 'Summarize this conversation (AI)', () => summarizeOpen(), 'ai-summarize-btn'));
     if (!onePane()) {
       const collapsed = $('screen-mail').classList.contains('list-collapsed');
       add(iconButton(collapsed ? 'collapse' : 'expand', collapsed ? 'Show the list (\\)' : 'Full view: hide the list (\\)', () => toggleListCollapsed(), { cls: 'view-btn' }));
     }
-    add(iconButton('reply', 'Reply (r)', () => startReply('reply')));
-    add(iconButton('replyAll', 'Reply all (a)', () => startReply('replyAll')));
-    add(iconButton('forward', 'Forward (f)', () => startReply('forward')));
     return bar;
   }
 
@@ -985,7 +1301,7 @@
       reader.appendChild(chips);
       loadSmartReplies(thread);
       const bar = el('div', 'reply-bar');
-      bar.appendChild(textButton('reply', 'Reply', () => startReply('reply')));
+      bar.appendChild(textButton('reply', 'Reply', () => startReply('reply'), 'btn-primary'));
       bar.appendChild(textButton('replyAll', 'Reply all', () => startReply('replyAll')));
       bar.appendChild(textButton('forward', 'Forward', () => startReply('forward')));
       reader.appendChild(bar);
@@ -1274,10 +1590,40 @@
 
   async function trashIds(ids) {
     if (!ids.length) return;
+    const lost = labelsLostToTrash(ids);
     const done = await eachThread(ids, 'trashThread', {});
     if (!done.length) return;
+    const counted = noteCleared(done.length);
     dropRows(done);
-    toast(done.length === 1 ? 'Moved to Trash' : plural(done.length, 'conversation') + ' moved to Trash');
+    toast(done.length === 1 ? 'Moved to Trash' : plural(done.length, 'conversation') + ' moved to Trash', {
+      action: 'Undo',
+      onAction: () => undoTrash(done, lost, counted),
+    });
+    refreshLabels();
+  }
+
+  // Gmail's trash takes INBOX away. Remember it per thread, so Undo can put the thread back where it was.
+  function labelsLostToTrash(ids) {
+    const lost = new Map();
+    for (const id of ids) {
+      const t = state.threads.find((x) => x.id === id) || (state.openThread && state.openThread.id === id ? state.openThread : null);
+      lost.set(id, t && (t.labelIds || []).includes('INBOX') ? ['INBOX'] : []);
+    }
+    return lost;
+  }
+
+  async function undoTrash(ids, lost, counted) {
+    let back = 0;
+    let fail = null;
+    for (const id of ids) {
+      const r = await call('untrashThread', { id, add: lost.get(id) || [] });
+      if (r.ok) back += 1;
+      else fail = fail || r;
+    }
+    if (fail) toast(errText(fail), { error: true });
+    else if (back) toast(back === 1 ? 'Moved back out of Trash' : plural(back, 'conversation') + ' moved back out of Trash');
+    if (counted) unnoteCleared(back);
+    refreshAfterUndo();
     refreshLabels();
   }
 
@@ -1285,6 +1631,7 @@
     if (!ids.length) return;
     const done = await eachThread(ids, 'modifyThread', { add: [], remove: ['INBOX'] });
     if (!done.length) return;
+    const counted = noteCleared(done.length);
     if (state.labelId === 'INBOX' && !state.q) dropRows(done);
     else {
       for (const t of state.threads) if (done.includes(t.id)) t.labelIds = (t.labelIds || []).filter((l) => l !== 'INBOX');
@@ -1296,7 +1643,8 @@
       onAction: async () => {
         const back = await eachThread(done, 'modifyThread', { add: ['INBOX'], remove: [] });
         if (back.length) toast('Moved back to Inbox');
-        refreshListQuietly();
+        if (counted) unnoteCleared(back.length);
+        refreshAfterUndo();
         refreshLabels();
       },
     });
@@ -1340,6 +1688,7 @@
     t.labelIds = t.labelIds.filter((l) => l !== 'INBOX');
     const row = state.threads.find((x) => x.id === id);
     if (row && Array.isArray(row.labelIds)) row.labelIds = row.labelIds.filter((l) => l !== 'INBOX');
+    const counted = noteCleared(1);
     if (state.labelId === 'INBOX' && !state.q) removeAndAdvance(id);
     else rerenderToolbar();
     toast('Archived', {
@@ -1348,7 +1697,8 @@
         const u = await call('modifyThread', { id, add: ['INBOX'], remove: [] });
         if (!u.ok) return toast(errText(u), { error: true });
         toast('Moved back to Inbox');
-        refreshListQuietly();
+        if (counted) unnoteCleared(1);
+        refreshAfterUndo();
         refreshLabels();
         if (state.openThread && state.openThread.id === id) {
           state.openThread.labelIds.push('INBOX');
@@ -1363,11 +1713,13 @@
     const t = state.openThread;
     if (!t) return;
     const id = t.id;
+    const lost = labelsLostToTrash([id]);
     const r = await call('trashThread', { id });
     if (!r.ok) return toast(errText(r), { error: true });
+    const counted = noteCleared(1);
     if (state.labelId === 'TRASH' && !state.q) rerenderToolbar();
     else removeAndAdvance(id);
-    toast('Moved to Trash');
+    toast('Moved to Trash', { action: 'Undo', onAction: () => undoTrash([id], lost, counted) });
     refreshLabels();
   }
 
@@ -3019,41 +3371,47 @@
     if (e.metaKey || e.ctrlKey || e.altKey) return;
     if (isTyping(e.target) || state.compose) return;
     const k = e.key;
+    // A handler returns false when it did nothing (no list, no open email, no target). Only real uses count.
+    const replyable = () => !!(state.openThread && state.openThread.messages && state.openThread.messages.length);
     const handlers = {
       c: () => openCompose(),
       '/': () => { $('search-input').focus(); $('search-input').select(); },
-      j: () => moveCursor(1),
-      k: () => moveCursor(-1),
-      Enter: () => openCursor(),
-      o: () => openCursor(),
-      u: () => { if (state.openId) closeReader(); },
+      j: () => { if (!state.threads.length) return false; moveCursor(1); },
+      k: () => { if (!state.threads.length) return false; moveCursor(-1); },
+      Enter: () => { if (!state.threads[state.cursor]) return false; openCursor(); },
+      o: () => { if (!state.threads[state.cursor]) return false; openCursor(); },
+      u: () => { if (!state.openId) return false; closeReader(); },
       e: () => {
         if (state.checked.size) archiveIds([...state.checked]);
-        else if (state.openThread) { if (threadInInbox(state.openThread)) archiveOpen(); }
+        else if (state.openThread) { if (threadInInbox(state.openThread)) archiveOpen(); else return false; }
         else if (state.threads[state.cursor]) archiveIds([state.threads[state.cursor].id]);
+        else return false;
       },
       '#': () => {
         if (state.checked.size) trashIds([...state.checked]);
         else if (state.openThread) trashOpen();
         else if (state.threads[state.cursor]) trashIds([state.threads[state.cursor].id]);
+        else return false;
       },
       x: () => {
         const t = state.threads[state.cursor] || (state.openId && state.threads[indexOfThread(state.openId)]);
-        if (t) toggleChecked(t.id, !state.checked.has(t.id));
+        if (!t) return false;
+        toggleChecked(t.id, !state.checked.has(t.id));
       },
-      r: () => startReply('reply'),
-      a: () => startReply('replyAll'),
-      f: () => startReply('forward'),
+      r: () => { if (!replyable()) return false; startReply('reply'); },
+      a: () => { if (!replyable()) return false; startReply('replyAll'); },
+      f: () => { if (!replyable()) return false; startReply('forward'); },
       s: () => {
         const id = state.openId || (state.threads[state.cursor] && state.threads[state.cursor].id);
-        if (id) toggleStar(id);
+        if (!id) return false;
+        toggleStar(id);
       },
-      U: () => markOpenUnread(),
+      U: () => { if (!state.openThread) return false; markOpenUnread(); },
       '?': () => call('showShortcuts'),
-      '\\': () => toggleListCollapsed(),
+      '\\': () => { if (!state.openId || onePane()) return false; toggleListCollapsed(); },
       // Next / previous inbox tab (Primary, Promotions …)
-      ']': () => { if (inTabs()) selectCategory(CATEGORIES[(CATEGORIES.findIndex((c) => c.id === state.category) + 1) % CATEGORIES.length].id); },
-      '[': () => { if (inTabs()) selectCategory(CATEGORIES[(CATEGORIES.findIndex((c) => c.id === state.category) + CATEGORIES.length - 1) % CATEGORIES.length].id); },
+      ']': () => { if (!inTabs()) return false; selectCategory(CATEGORIES[(CATEGORIES.findIndex((c) => c.id === state.category) + 1) % CATEGORIES.length].id); },
+      '[': () => { if (!inTabs()) return false; selectCategory(CATEGORIES[(CATEGORIES.findIndex((c) => c.id === state.category) + CATEGORIES.length - 1) % CATEGORIES.length].id); },
       F: () => call('searchAll'),
     };
     // Enter on a focused button should click it, not open the cursor thread.
@@ -3061,7 +3419,16 @@
     const h = handlers[k];
     if (!h) return;
     e.preventDefault();
-    h();
+    if (h() !== false) noteShortcut(k);
+  }
+
+  // Tell Roost a shortcut was used (the shortcut bar drops keys a person knows). Stops after 5 per key.
+  const LEARN_KEYS = new Set(['j', 'k', 'e', '#', 'r', 's', 'x', 'c', '/', '[', ']', 'u', 'F']);
+  const keyUses = {};
+  function noteShortcut(k) {
+    if (!LEARN_KEYS.has(k) || (keyUses[k] || 0) >= 5) return;
+    keyUses[k] = (keyUses[k] || 0) + 1;
+    call('noteShortcut', { key: k });
   }
 
   // ---------------------------------------------------------------------------
@@ -3108,6 +3475,13 @@
       b.addEventListener('click', () => openExternal(b.getAttribute('data-url')));
     });
     $('setup-form').addEventListener('submit', onSaveSetup);
+    $('reauth-now').addEventListener('click', reauthNow);
+    $('reauth-later').addEventListener('click', reauthLater);
+    setInterval(() => { if (currentScreen === 'screen-mail') updateReauthBanner(); }, 30 * 60 * 1000);
+    $('cat-tabs').addEventListener('scroll', updateTabOverflow, { passive: true });
+    window.addEventListener('resize', updateTabOverflow);
+    $('cat-more').addEventListener('click', () => $('cat-tabs').scrollBy({ left: Math.max(120, $('cat-tabs').clientWidth * 0.6), behavior: 'smooth' }));
+    wireSetupWizard();
     $('setup-cancel').addEventListener('click', () => showSignIn());
     $('loading-retry').addEventListener('click', init);
 

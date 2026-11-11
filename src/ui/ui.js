@@ -55,11 +55,13 @@ function iconEl(svc, size) {
 const presetIcon = (type) => (presets.find((p) => p.type === type) || {}).icon || null;
 const shortName = (svc) => String(svc.name).replace(/^Google\s+/i, '');
 
+// Red = needs a person. Gray number = unread, but calm (e.g. Promotions). Gray dot = something new, no count.
 function badgeEl(svc) {
-  if (!(svc.unread > 0 || svc.dot)) return null;
+  const k = roostUi.badgeFor(svc);
+  if (!k) return null;
   const b = document.createElement('span');
-  b.className = 'badge' + (svc.unread > 0 ? '' : ' dot');
-  if (svc.unread > 0) b.textContent = svc.unread > 99 ? '99+' : String(svc.unread);
+  b.className = 'badge' + (k.kind === 'red' ? '' : k.kind === 'calm' ? ' calm' : ' dot');
+  b.textContent = k.text;
   return b;
 }
 
@@ -73,7 +75,7 @@ function tileEl(svc) {
   li.dataset.group = svc.group;
   li.title = svc.name + (svc.muted ? ' (notifications off)' : '');
   li.draggable = true;
-  const icon = iconEl({ ...svc, icon: svc.icon || (svc.group === 'top' ? presetIcon(svc.type) : null) });
+  const icon = iconEl({ ...svc, icon: svc.icon || presetIcon(svc.type) });
   const b = badgeEl(svc);
   if (b) icon.appendChild(b);
   if (svc.muted) {
@@ -95,6 +97,7 @@ function render() {
   const has = (g) => state.services.some((s) => s.group === g);
   $('#divider').hidden = !(has('mail') && has('chat'));
   $('#welcome').hidden = state.services.length > 0;
+  if (!$('#welcome').hidden) renderWelcome();
   document.body.classList.toggle('has-app', state.services.length > 0 && !!state.activeId);
   document.body.classList.toggle('top-empty', !has('top'));
   const dnd = $('#dnd');
@@ -102,9 +105,8 @@ function render() {
   dnd.classList.toggle('on', !!quiet);
   dnd.classList.toggle('auto', !!quiet && quiet !== 'dnd');
   dnd.setAttribute('aria-pressed', String(!!state.dnd));
-  dnd.title = state.dnd ? 'Do Not Disturb is ON – click to turn off (⌘⇧D)'
-    : quiet === 'call' ? 'Quiet: you are in a call. Click to turn on Do Not Disturb'
-      : quiet === 'hours' ? 'Quiet hours. Click to turn on Do Not Disturb' : 'Do Not Disturb (⌘⇧D)';
+  const qt = roostUi.quietText(state.dnd ? 'dnd' : quiet, state.settings && state.settings.quietHours);
+  dnd.title = qt.title;
   document.body.classList.toggle('dnd-on', !!quiet);
   const topAcc = $('#top-account');
   topAcc.hidden = !state.topEmail;
@@ -112,7 +114,7 @@ function render() {
   topAcc.title = state.topEmail ? `The top bar apps open as ${state.topEmail} (the Gmail tab you used last)` : '';
   const pill = $('#quiet-pill');
   pill.hidden = !quiet;
-  pill.textContent = quiet === 'call' ? '🔕 Quiet – in a call' : quiet === 'hours' ? '🔕 Quiet hours' : quiet ? '🔕 Do Not Disturb' : '';
+  pill.textContent = quiet ? roostUi.quietText(quiet, state.settings && state.settings.quietHours).pill : '';
   pill.title = 'Notification settings';
   renderKeybar();
   if (sdlg.open) renderSettings();
@@ -199,7 +201,7 @@ function renderPresets() {
     b.type = 'button';
     b.className = 'preset' + (p.type === selectedType ? ' selected' : '');
     b.dataset.type = p.type;
-    b.append(iconEl({ name: p.type === 'custom' ? '+' : p.name, color: p.color, icon: p.group === 'top' ? p.icon : null }, 'small'));
+    b.append(iconEl({ name: p.type === 'custom' ? '+' : p.name, color: p.color, icon: p.icon || null }, 'small'));
     const t = document.createElement('span');
     t.textContent = shortName(p);
     b.appendChild(t);
@@ -291,6 +293,86 @@ $('#form').addEventListener('submit', async (e) => {
   }
 });
 
+// ----- welcome screen: pick apps with one click -----
+const welcomePicked = new Set();
+let welcomeBusy = false;
+
+function renderWelcome() {
+  const box = $('#welcome-tiles');
+  const list = roostUi.welcomePresets(presets);
+  for (const t of [...welcomePicked]) if (!list.some((p) => p.type === t)) welcomePicked.delete(t);
+  const shown = [...box.querySelectorAll('.wtile')].map((b) => b.dataset.type).join(',');
+  if (shown !== list.map((p) => p.type).join(',')) {
+    box.textContent = '';
+    for (const p of list) {
+      const b = document.createElement('button');
+      b.type = 'button';
+      b.className = 'wtile';
+      b.dataset.type = p.type;
+      const icon = iconEl({ name: p.name, color: p.color, icon: p.icon || null });
+      const check = document.createElement('span');
+      check.className = 'wcheck';
+      check.setAttribute('aria-hidden', 'true');
+      check.textContent = '✓';
+      const text = document.createElement('span');
+      text.className = 'wtext';
+      const name = document.createElement('b');
+      name.textContent = p.name;
+      const hint = document.createElement('small');
+      hint.textContent = roostUi.welcomeHint(p);
+      text.append(name, hint);
+      b.append(icon, text, check);
+      box.appendChild(b);
+    }
+  }
+  for (const b of box.querySelectorAll('.wtile')) {
+    const on = welcomePicked.has(b.dataset.type);
+    b.classList.toggle('picked', on);
+    b.setAttribute('aria-pressed', String(on));
+    b.disabled = welcomeBusy;
+  }
+  const go = $('#welcome-go');
+  go.textContent = welcomeBusy ? 'Adding…' : roostUi.welcomeButtonLabel(welcomePicked.size);
+  go.disabled = welcomeBusy || welcomePicked.size === 0;
+}
+
+$('#welcome-tiles').addEventListener('click', (e) => {
+  const b = e.target.closest('.wtile');
+  if (!b || welcomeBusy) return;
+  const t = b.dataset.type;
+  if (welcomePicked.has(t)) welcomePicked.delete(t); else welcomePicked.add(t);
+  renderWelcome();
+});
+
+$('#welcome-go').addEventListener('click', async () => {
+  if (welcomeBusy || !welcomePicked.size) return;
+  const picked = roostUi.welcomePresets(presets).filter((p) => welcomePicked.has(p.type));
+  const err = $('#welcome-error');
+  err.hidden = true;
+  welcomeBusy = true;
+  renderWelcome();
+  const failed = [];
+  for (const p of picked) {
+    let res;
+    try { res = await roost.add({ type: p.type, name: p.name, url: p.url, group: p.group || 'chat' }); } catch (e) { res = { ok: false, error: String(e && e.message || e) }; }
+    if (res && res.ok) welcomePicked.delete(p.type);
+    else failed.push({ p, error: (res && res.error) || 'Something went wrong.' });
+  }
+  welcomeBusy = false;
+  if (failed.length) {
+    const msg = `Could not add ${failed.map((f) => `${f.p.name} (${f.error})`).join(', ')}.`;
+    err.textContent = msg;
+    err.hidden = false;
+    // Some apps were added, so the welcome screen is gone: show the problem in the Add dialog instead.
+    if (state.services.length > 0) {
+      openAdd(failed[0].p.type);
+      $('#f-error').textContent = msg;
+      $('#f-error').hidden = false;
+    }
+  }
+  renderWelcome();
+});
+
 // ----- settings -----
 const GROUP_NAMES = { mail: 'Email', chat: 'Messages', top: 'Top bar' };
 
@@ -319,8 +401,7 @@ function renderSettings() {
   $('#s-mv-density').value = mv.density || 'comfortable';
   $('#s-mv-preview').checked = mv.preview !== false;
   $('#s-mv-labels').checked = mv.labels !== false;
-  $('#s-status').textContent = state.quiet === 'call' ? 'Quiet now: you are in a call.'
-    : state.quiet === 'hours' ? 'Quiet now: quiet hours.' : state.quiet === 'dnd' ? 'Quiet now: Do Not Disturb is on.' : 'Not quiet now.';
+  $('#s-status').textContent = roostUi.quietText(state.quiet, s.quietHours).status;
 
   const box = $('#s-apps');
   box.textContent = '';
@@ -329,8 +410,16 @@ function renderSettings() {
   head.innerHTML = '<span></span><span>Notifications</span><span>Sounds</span><span>Badge</span>';
   box.appendChild(head);
   let anyWindow = false;
+  // Only apps that differ from the default (notifications, sounds and badge on), unless "Show all apps" is on.
+  // An app stays in the list while Settings is open, so it does not jump away when you switch it back.
+  const isDefault = (svc) => !svc.muted && svc.sounds !== false && svc.badge !== false;
+  for (const svc of state.services) if (!isDefault(svc)) appsShown.add(svc.id);
+  const showAll = $('#s-apps-all').checked;
+  const visible = state.services.filter((svc) => showAll || appsShown.has(svc.id));
+  head.hidden = !visible.length;
+  $('#s-apps-default').hidden = showAll || visible.length > 0;
   for (const g of ['mail', 'chat', 'top']) {
-    for (const svc of state.services.filter((x) => x.group === g)) {
+    for (const svc of visible.filter((x) => x.group === g)) {
       const row = document.createElement('div');
       row.className = 'app-row';
       const name = document.createElement('span');
@@ -361,13 +450,53 @@ function renderSettings() {
   $('#s-ai-remove').hidden = !state.aiConfigured;
 }
 
+// One section at a time; the menu on the left (on top when the window is narrow) switches it.
+const navBtns = () => [...document.querySelectorAll('#s-nav .s-nav-btn')];
+let settingsSection = 'quiet';
+function showSection(name, { focusMenu = false } = {}) {
+  const btns = navBtns();
+  const btn = btns.find((b) => b.dataset.sec === name) || btns[0];
+  settingsSection = btn.dataset.sec;
+  for (const b of btns) {
+    const on = b === btn;
+    if (on) b.setAttribute('aria-current', 'true'); else b.removeAttribute('aria-current');
+    const sec = document.getElementById(b.getAttribute('aria-controls'));
+    if (sec) sec.hidden = !on;
+  }
+  $('.s-body').scrollTop = 0;
+  if (focusMenu) btn.focus();
+}
+$('#s-nav').addEventListener('click', (e) => {
+  const b = e.target.closest('.s-nav-btn');
+  if (b) showSection(b.dataset.sec);
+});
+$('#s-nav').addEventListener('keydown', (e) => {
+  const btns = navBtns();
+  const i = btns.indexOf(document.activeElement);
+  if (i < 0) return;
+  const step = { ArrowDown: 1, ArrowRight: 1, ArrowUp: -1, ArrowLeft: -1 }[e.key];
+  let next = null;
+  if (step) next = btns[(i + step + btns.length) % btns.length];
+  else if (e.key === 'Home') next = btns[0];
+  else if (e.key === 'End') next = btns[btns.length - 1];
+  if (!next) return;
+  e.preventDefault();
+  showSection(next.dataset.sec, { focusMenu: true });
+});
+const appsShown = new Set(); // apps listed in Settings › Apps while it is open
+$('#s-apps-all').addEventListener('change', () => renderSettings());
+
 function openSettings(section) {
   if (dlg.open) dlg.close();
+  if (!sdlg.open) { appsShown.clear(); $('#s-apps-all').checked = false; }
   renderSettings();
   openModal(sdlg);
+  showSection(section || (sdlg.dataset.opened ? settingsSection : 'quiet'));
+  sdlg.dataset.opened = '1';
   const target = section && document.getElementById(`sec-${section}`);
-  if (target) { target.scrollIntoView({ block: 'start' }); target.classList.add('flash'); setTimeout(() => target.classList.remove('flash'), 1200); }
+  if (target) { target.classList.add('flash'); setTimeout(() => target.classList.remove('flash'), 1200); }
   if (section === 'ai') $('#s-ai-key').focus();
+  else if (!section) (navBtns().find((b) => b.dataset.sec === settingsSection) || navBtns()[0]).focus();
 }
 
 $('#s-close').addEventListener('click', () => sdlg.close());
@@ -397,7 +526,7 @@ $('#add-top').addEventListener('click', () => openAdd('drive'));
 $('#dnd').addEventListener('click', () => roost.toggleDnd());
 $('#settings-btn').addEventListener('click', () => openSettings());
 $('#quiet-pill').addEventListener('click', () => openSettings('quiet'));
-$('#welcome-add').addEventListener('click', () => openAdd());
+$('#welcome-more').addEventListener('click', () => openAdd('custom'));
 roost.onAdd(() => openAdd());
 roost.onEdit(openEdit);
 roost.onSettings(openSettings);
@@ -592,21 +721,44 @@ roost.onShortcuts(openShortcuts);
 
 const KEYBAR_INBOX = [['c', 'New email'], ['/', 'Search'], ['⇧F', 'All inboxes'], ['j k', 'Move'], ['x', 'Tick'], ['e', 'Archive'], ['#', 'Delete'], ['r', 'Reply'], ['s', 'Star'], ['[ ]', 'Tabs'], ['u', 'Back']];
 const KEYBAR_APP = [[`${MOD}⇧F`, 'Search all inboxes'], [`${MOD}N`, 'New email'], [`${MOD}1–9`, 'Go to app'], [`${MOD}⇧] [`, 'Next / previous app'], [`${MOD}⇧D`, 'Do Not Disturb'], [`${MOD}T`, 'Add app']];
-let keybarKind = null;
+let keybarShown = ''; // what the bar shows now, so it only redraws on a change
+let keybarDoneLine = false; // the "You know the shortcuts" line showed in this session
 
+// In an inbox the bar steps back: a shortcut used 5 times leaves the bar. When every inbox shortcut is
+// learned, one short line shows instead. After you leave that inbox, the bar stays away in inboxes
+// (settings.keyBarDoneSeen; main.js then gives the inbox the full height). The bar in other apps stays.
 function renderKeybar() {
-  const on = !state.settings || state.settings.keyBar !== false;
+  const s = state.settings || {};
+  const active = state.services.find((x) => x.id === state.activeId);
+  const kind = active && active.type === 'gmail' && active.mode === 'api' ? 'inbox' : 'app';
+  if (kind !== 'inbox' && keybarDoneLine && !s.keyBarDoneSeen) {
+    keybarDoneLine = false;
+    roost.setSettings({ keyBarDoneSeen: true });
+  }
+  const steppedBack = kind === 'inbox' && !!s.keyBarDoneSeen;
+  const on = s.keyBar !== false && !steppedBack;
   const bar = $('#keybar');
   bar.hidden = !on;
+  bar.dataset.kind = kind;
   document.body.classList.toggle('keybar-on', on);
-  if (!on) return;
-  const active = state.services.find((s) => s.id === state.activeId);
-  const kind = active && active.type === 'gmail' && active.mode === 'api' ? 'inbox' : 'app';
-  if (kind === keybarKind) return;
-  keybarKind = kind;
+  if (!on) { keybarShown = ''; return; }
+  const items = kind === 'inbox' ? roostUi.keysToShow(KEYBAR_INBOX, state.keysLearned) : KEYBAR_APP;
+  const done = kind === 'inbox' && !items.length;
+  if (done) keybarDoneLine = true;
+  const sig = `${kind}|${done}|${items.map((i) => i[0]).join(' ')}`;
+  if (sig === keybarShown) return;
+  keybarShown = sig;
   const box = $('#keybar-keys');
   box.textContent = '';
-  for (const [keys, what] of kind === 'inbox' ? KEYBAR_INBOX : KEYBAR_APP) {
+  bar.classList.toggle('done', done);
+  if (done) {
+    const line = document.createElement('span');
+    line.className = 'keybar-done';
+    line.textContent = `You know the shortcuts. ${MOD}/ shows them all.`;
+    box.appendChild(line);
+    return;
+  }
+  for (const [keys, what] of items) {
     const item = document.createElement('span');
     item.className = 'keybar-item';
     const k = document.createElement('kbd');
