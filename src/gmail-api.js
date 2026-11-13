@@ -176,6 +176,30 @@ async function mapLimit(items, limit, fn) {
   return out;
 }
 
+// Gmail allows each user 15,000 "quota units" per minute, and it also blocks short bursts.
+// Each call has a cost (Google's table). Roost spends at most QUOTA_RATE units per second,
+// with a small burst allowance, so big jobs (contacts, long lists) spread out instead of failing.
+const QUOTA_RATE = Number(process.env.ROOST_GMAIL_QUOTA_RATE || 150); // units per second (9,000 per minute)
+const QUOTA_BURST = 300;
+function quotaCost(method, apiPath) {
+  const p = String(apiPath || '');
+  if (!p.startsWith('/gmail/')) return 0; // other Google APIs have their own limits
+  if (/\/messages\/send$/.test(p)) return 100;
+  if (/\/history$/.test(p)) return 2;
+  if (/\/(labels|profile)(\/|$)/.test(p)) return 1;
+  if (/\/threads(\/|$)/.test(p)) return 10;
+  return 5; // messages.get, messages.list, attachments
+}
+const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
+
+// Google's answer when a user goes over the limit: 429, or 403 with a rate-limit reason.
+function isRateLimited(status, json) {
+  if (status === 429) return true;
+  if (status !== 403) return false;
+  const reasons = (json?.error?.errors || []).map((e) => e.reason).join(' ');
+  return /rateLimitExceeded|userRateLimitExceeded/i.test(reasons) || /quota exceeded|rate limit/i.test(json?.error?.message || '');
+}
+
 const INBOX_CATEGORIES = { promotions: 'CATEGORY_PROMOTIONS', social: 'CATEGORY_SOCIAL', updates: 'CATEGORY_UPDATES', forums: 'CATEGORY_FORUMS' };
 
 class ApiError extends Error {
@@ -398,7 +422,27 @@ display:grid;place-items:center;height:90vh;background:#15151c;color:#ececf1"><d
 
   // ----- REST -----
 
-  async api(method, apiPath, { query, body, retried = false } = {}) {
+  // Wait until the call fits in the per-second budget. Calls take their turn one by one.
+  takeQuota(cost) {
+    if (!cost) return Promise.resolve();
+    const rate = this.quotaRate || QUOTA_RATE;
+    const turn = (this.quotaQueue || Promise.resolve()).then(async () => {
+      for (;;) {
+        const now = Date.now();
+        if (this.quotaPausedUntil > now) { await sleep(this.quotaPausedUntil - now); continue; }
+        const last = this.quotaAt || now;
+        this.quotaTokens = Math.min(QUOTA_BURST, (this.quotaTokens ?? QUOTA_BURST) + ((now - last) / 1000) * rate);
+        this.quotaAt = now;
+        if (this.quotaTokens >= cost) { this.quotaTokens -= cost; return; }
+        await sleep(Math.ceil(((cost - this.quotaTokens) / rate) * 1000));
+      }
+    });
+    this.quotaQueue = turn.catch(() => {});
+    return turn;
+  }
+
+  async api(method, apiPath, { query, body, retried = false, attempt = 0 } = {}) {
+    await this.takeQuota(quotaCost(method, apiPath));
     const token = await this.accessToken();
     const url = new URL(this.apiBase + apiPath);
     for (const [k, v] of Object.entries(query || {})) {
@@ -413,9 +457,22 @@ display:grid;place-items:center;height:90vh;background:#15151c;color:#ececf1"><d
     });
     if (res.status === 401 && !retried) {
       this.access = null;
-      return this.api(method, apiPath, { query, body, retried: true });
+      return this.api(method, apiPath, { query, body, retried: true, attempt });
     }
     const json = await res.json().catch(() => ({}));
+    if (!res.ok && isRateLimited(res.status, json)) {
+      const maxRetries = this.maxRetries ?? 4;
+      if (attempt < maxRetries) {
+        // Wait (Google's Retry-After, or 1 s, 2 s, 4 s, 8 s plus a little random), and make every other call wait too.
+        const after = Number(res.headers?.get?.('retry-after'));
+        const base = this.retryBaseMs ?? 1000;
+        const wait = after > 0 ? after * 1000 : base * 2 ** attempt + Math.random() * base;
+        this.quotaPausedUntil = Math.max(this.quotaPausedUntil || 0, Date.now() + wait);
+        this.quotaTokens = 0;
+        return this.api(method, apiPath, { query, body, retried, attempt: attempt + 1 });
+      }
+      throw new ApiError('Gmail is busy: too many requests in a short time. Wait one minute, then try again.', { status: 429 });
+    }
     if (!res.ok) {
       const msg = json.error?.message || `Gmail error ${res.status}`;
       if (res.status === 403 && /not been used|disabled/i.test(msg)) throw new ApiError(this.apiDisabledText, { status: 403, apiDisabled: true });
@@ -485,11 +542,24 @@ class GmailAccount extends GoogleAccount {
     }
     if (labelId === 'SPAM' || labelId === 'TRASH') query.includeSpamTrash = true;
     const list = await this.api('GET', '/gmail/v1/users/me/threads', { query });
-    const threads = await mapLimit(list.threads || [], 8, async (t) => {
+    // A thread's historyId changes when anything in it changes. Same historyId = reuse the summary
+    // we have, so a refresh after new mail costs a few calls instead of one per thread.
+    if (!this.summaryCache) this.summaryCache = new Map();
+    const cache = this.summaryCache;
+    const threads = await mapLimit(list.threads || [], 4, async (t) => {
+      const hit = t.historyId && cache.get(t.id);
+      if (hit && hit.historyId === t.historyId) return hit.summary;
       const full = await this.api('GET', `/gmail/v1/users/me/threads/${t.id}`, {
         query: { format: 'metadata', metadataHeaders: ['From', 'Subject', 'Date'] },
       }).catch(() => null);
-      return full ? summarizeThread(full, t.snippet) : null;
+      if (!full) return null;
+      const summary = summarizeThread(full, t.snippet);
+      if (t.historyId) {
+        cache.delete(t.id);
+        cache.set(t.id, { historyId: t.historyId, summary });
+        if (cache.size > 3000) cache.delete(cache.keys().next().value);
+      }
+      return summary;
     });
     return { threads: threads.filter(Boolean), nextPageToken: list.nextPageToken || null };
   }
@@ -607,7 +677,7 @@ class GmailAccount extends GoogleAccount {
     };
     const scan = async (labelId, max, headers, weight) => {
       const list = await this.api('GET', '/gmail/v1/users/me/messages', { query: { labelIds: [labelId], maxResults: max } }).catch(() => ({}));
-      await mapLimit(list.messages || [], 10, async (m) => {
+      await mapLimit(list.messages || [], 3, async (m) => {
         const meta = await this.api('GET', `/gmail/v1/users/me/messages/${m.id}`, { query: { format: 'metadata', metadataHeaders: headers } }).catch(() => null);
         if (!meta) return;
         const h = meta.payload?.headers || [];
@@ -757,7 +827,7 @@ const CONTRACT = ['getStatus', 'saveClientConfig', 'signIn', 'signOut', 'listLab
   'modifyThread', 'trashThread', 'untrashThread', 'send', 'listContacts', 'pickAttachments', 'downloadAttachment', 'openExternal'];
 
 module.exports = {
-  GoogleAccount, GmailAccount, GmailStore, ApiError, CONTRACT, ENDPOINTS, mapLimit,
+  GoogleAccount, GmailAccount, GmailStore, ApiError, CONTRACT, ENDPOINTS, mapLimit, quotaCost, isRateLimited,
   // helpers for tests
   decodeWords, parseAddress, splitAddresses, parsePayload, buildRawMessage, b64url, fromB64url, summarizeThread, decodeHtmlEntities,
 };

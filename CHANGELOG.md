@@ -1,5 +1,20 @@
 # Changelog
 
+## 0.2.1 — 2026-11-12
+
+A fix for Gmail's "Quota exceeded" error.
+
+### Fixed
+- **No more random "Quota exceeded … Units per minute per user" errors.** Google limits how fast one user can call Gmail, and it blocks short bursts. Roost sent too many requests at the same time (for example, 20 at once to build your contact list). Now:
+  - Roost **paces its Gmail requests** under Google's limit, with a small burst allowance. Each request counts with Google's own cost (a thread is 10 units, a message is 5, sending is 100).
+  - When Google still says "too fast", Roost **waits and tries again** (1, 2, 4, then 8 seconds, or the wait Google asks for), and all other requests wait too. Only after that do you see a message: "Gmail is busy … Wait one minute, then try again."
+  - **Fewer requests.** Roost does not fetch an email again when it did not change. A refresh after new mail now needs a few requests, not one for each email in the list.
+  - Fewer requests at the same time: 4 for mail lists (was 8), 3 per folder for contacts (was 10).
+
+### Notes
+- Your contact list for recipient autofill now fills in about 5–8 seconds. It loads in the background and is kept for 30 minutes.
+- New tests for the request costs, the retry and the summary cache.
+
 ## 0.2.0 — 2026-11-11
 
 An easier start, a calmer sidebar and safer mistakes. Plus a new Gmail composer.

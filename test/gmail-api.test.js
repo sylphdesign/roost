@@ -215,3 +215,68 @@ test('GmailStore remembers when each account signed in', () => {
   assert.strictEqual(reread.getAccount('k').email, 'a@x.com');
   fs.rmSync(dir, { recursive: true, force: true });
 });
+
+test('quota: Google costs and rate-limit answers', () => {
+  const { quotaCost, isRateLimited } = require('../src/gmail-api');
+  assert.strictEqual(quotaCost('GET', '/gmail/v1/users/me/threads/abc'), 10);
+  assert.strictEqual(quotaCost('GET', '/gmail/v1/users/me/messages/abc'), 5);
+  assert.strictEqual(quotaCost('POST', '/gmail/v1/users/me/messages/send'), 100);
+  assert.strictEqual(quotaCost('GET', '/gmail/v1/users/me/labels/INBOX'), 1);
+  assert.strictEqual(quotaCost('GET', '/gmail/v1/users/me/history'), 2);
+  assert.strictEqual(quotaCost('GET', '/calendar/v3/users/me/calendarList'), 0);
+  assert.ok(isRateLimited(429, {}));
+  assert.ok(isRateLimited(403, { error: { message: "Quota exceeded for quota metric 'Total Query Cost'", errors: [] } }));
+  assert.ok(isRateLimited(403, { error: { errors: [{ reason: 'userRateLimitExceeded' }] } }));
+  assert.ok(!isRateLimited(403, { error: { message: 'Insufficient Permission' } }));
+});
+
+test('api waits and tries again when Gmail says "quota exceeded"', async () => {
+  const { GmailAccount } = require('../src/gmail-api');
+  const realFetch = global.fetch;
+  let calls = 0;
+  global.fetch = async () => {
+    calls++;
+    if (calls <= 2) return { ok: false, status: 429, headers: new Map(), json: async () => ({ error: { message: 'Quota exceeded' } }) };
+    return { ok: true, status: 200, json: async () => ({ fine: true }) };
+  };
+  try {
+    const acc = Object.create(GmailAccount.prototype);
+    Object.assign(acc, { apiBase: 'http://x', accessToken: async () => 't', retryBaseMs: 5 });
+    assert.deepStrictEqual(await acc.api('GET', '/gmail/v1/users/me/profile'), { fine: true });
+    assert.strictEqual(calls, 3);
+    calls = -100; // always fail
+    acc.maxRetries = 1;
+    await assert.rejects(acc.api('GET', '/gmail/v1/users/me/profile'), (e) => e.status === 429 && /Wait one minute/.test(e.message));
+  } finally { global.fetch = realFetch; }
+});
+
+test('quota budget spreads a burst of calls over time', async () => {
+  const { GmailAccount } = require('../src/gmail-api');
+  const acc = Object.create(GmailAccount.prototype);
+  acc.quotaRate = 1000; // units per second
+  const t0 = Date.now();
+  await Promise.all(Array.from({ length: 50 }, () => acc.takeQuota(10))); // 500 units, burst is 300
+  const ms = Date.now() - t0;
+  assert.ok(ms >= 150, `500 units took only ${ms} ms`);
+});
+
+test('listThreads reuses summaries of threads that did not change', async () => {
+  const { GmailAccount } = require('../src/gmail-api');
+  let gets = 0;
+  let hist = '5';
+  const self = {
+    api: async (_m, p) => {
+      if (p.endsWith('/threads')) return { threads: [{ id: 'a', historyId: hist, snippet: 's' }, { id: 'b', historyId: '7', snippet: 's' }] };
+      gets++;
+      return { id: p.split('/').pop(), messages: [{ labelIds: ['INBOX'], internalDate: '1', payload: { headers: [{ name: 'Subject', value: 'hi' }] } }] };
+    },
+  };
+  const first = await GmailAccount.prototype.listThreads.call(self, { labelId: 'INBOX' });
+  assert.strictEqual(first.threads.length, 2);
+  assert.strictEqual(gets, 2);
+  await GmailAccount.prototype.listThreads.call(self, { labelId: 'INBOX' });
+  assert.strictEqual(gets, 2, 'nothing changed: no new thread calls');
+  hist = '6';
+  await GmailAccount.prototype.listThreads.call(self, { labelId: 'INBOX' });
+  assert.strictEqual(gets, 3, 'only the changed thread is fetched again');
+});
