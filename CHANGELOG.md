@@ -1,6 +1,6 @@
 # Changelog
 
-## Unreleased
+## 0.2.3 — 2026-11-27
 
 ### Safer
 - **Only files you pick can be attached.** Roost attaches a file to an email only if you chose it in the file dialog.
