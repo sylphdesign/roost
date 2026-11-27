@@ -385,13 +385,18 @@ display:grid;place-items:center;height:90vh;background:#15151c;color:#ececf1"><d
 
   // fetch with a time limit: a hanging connection must not block every later call.
   async fetchWithTimeout(url, opts) {
+    // A normal timer (not AbortSignal.timeout, whose timer does not keep Node running), cleared when the request ends.
+    const ctrl = new AbortController();
+    const timer = setTimeout(() => ctrl.abort(new DOMException('Google did not answer in time.', 'TimeoutError')), this.fetchTimeoutMs ?? FETCH_TIMEOUT_MS);
     try {
-      return await fetch(url, { ...opts, signal: AbortSignal.timeout(this.fetchTimeoutMs ?? FETCH_TIMEOUT_MS) });
+      return await fetch(url, { ...opts, signal: ctrl.signal });
     } catch (err) {
       if (err && (err.name === 'TimeoutError' || err.name === 'AbortError')) {
         throw new ApiError('Google did not answer in time. Check your internet connection, then try again.', { status: 0 });
       }
       throw err; // other network errors: as before
+    } finally {
+      clearTimeout(timer);
     }
   }
 
