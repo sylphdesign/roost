@@ -12,7 +12,7 @@ const { EventEmitter } = require('events');
 
 // Test hooks (fake Google servers, plain tokens) work only outside a packaged app.
 // In plain node tests require('electron') is not the Electron API: then this is false.
-const IS_PACKAGED = (() => { try { return require('electron').app?.isPackaged === true; } catch { return false; } })();
+const IS_PACKAGED = (() => { try { return !!process.versions.electron && require('electron').app?.isPackaged === true; } catch { return false; } })();
 const testEnv = (name) => (IS_PACKAGED ? undefined : process.env[name]);
 
 const SCOPE = 'https://www.googleapis.com/auth/gmail.modify';
@@ -224,11 +224,18 @@ class GmailStore {
   constructor(file, safeStorage) {
     this.file = file;
     this.safe = !testEnv('ROOST_PLAIN_TOKENS') && safeStorage && safeStorage.isEncryptionAvailable() ? safeStorage : null;
+    // Plain text is only for tests (no safeStorage given, or the test hook). With a real safeStorage
+    // that cannot encrypt (no Keychain), refuse to write secrets to disk.
+    this.allowPlain = !safeStorage || !!testEnv('ROOST_PLAIN_TOKENS');
     this.data = { client: null, accounts: {} };
     try { this.data = { client: null, accounts: {}, ...JSON.parse(fs.readFileSync(file, 'utf8')) }; } catch { /* first run */ }
   }
 
-  enc(text) { return this.safe ? `enc:${this.safe.encryptString(text).toString('base64')}` : `plain:${text}`; }
+  enc(text) {
+    if (this.safe) return `enc:${this.safe.encryptString(text).toString('base64')}`;
+    if (this.allowPlain) return `plain:${text}`;
+    throw new ApiError('Roost cannot reach the macOS Keychain, so it cannot save your Google sign-in safely. Restart your Mac, then try again.');
+  }
 
   dec(value) {
     if (!value) return null;
@@ -694,6 +701,8 @@ class GmailAccount extends GoogleAccount {
     const files = [];
     let total = 0;
     for (const a of attachments) {
+      // Only files you picked in the file dialog can be attached.
+      if (!this.pickedPaths?.has(a.path)) throw new ApiError('Attach the file again with the paperclip button.');
       const data = await this.deps.readFile(a.path);
       total += data.length;
       files.push({ filename: path.basename(a.path), mimeType: mimeOf(a.path), data });
@@ -745,6 +754,8 @@ class GmailAccount extends GoogleAccount {
 
   async pickAttachments() {
     const files = await this.deps.showOpenDialog();
+    this.pickedPaths ||= new Set();
+    for (const f of files || []) if (f && f.path) this.pickedPaths.add(f.path);
     return { files };
   }
 

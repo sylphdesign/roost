@@ -78,6 +78,9 @@ module.exports = async ({ win, getState, quit }) => {
       await wait(1000);
       step('mark read lowers badge', mr.ok && badge() === before - 1, { before, after: badge() });
 
+      // Like a user: pick the file in the dialog first (ROOST_TEST_ATTACH answers the dialog). Only picked files can be sent.
+      const picked = await call('pickAttachments');
+      step('picks a file to attach', picked.ok && picked.files?.[0]?.path === process.env.ROOST_TEST_ATTACH, picked);
       const rep = last ? await call('send', {
         to: last.fromEmail, subject: `Re: ${tc.thread.subject}`, body: 'Thanks!\n\nOn ... wrote:\n> hi', threadId: tc.thread.id,
         inReplyTo: last.messageIdHeader, references: `${last.references ? `${last.references} ` : ''}${last.messageIdHeader}`,
