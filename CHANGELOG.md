@@ -11,6 +11,9 @@
 - **Intel Macs:** `npm run dist:universal` builds one app for Intel and Apple Silicon.
 - **Automatic tests on GitHub** for each push and pull request.
 
+### Fixed
+- **Email view in small windows.** In a Roost window 980 px wide or less, the List width setting now works, and "Under the list" puts the email under the list (it was next to it).
+
 ### Changed
 - Electron 45.5.0 (security fixes) and Anthropic SDK 1.14.0.
 
