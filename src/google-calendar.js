@@ -4,7 +4,9 @@ const crypto = require('crypto');
 const { GoogleAccount, ApiError, mapLimit } = require('./gmail-api');
 
 const CAL_SCOPE = 'https://www.googleapis.com/auth/calendar';
-const CAL_BASE = process.env.ROOST_CALENDAR_API_BASE || 'https://www.googleapis.com';
+// Test hook only: a packaged (shipped) app always talks to Google.
+const IS_PACKAGED = (() => { try { return require('electron').app?.isPackaged === true; } catch { return false; } })();
+const CAL_BASE = (!IS_PACKAGED && process.env.ROOST_CALENDAR_API_BASE) || 'https://www.googleapis.com';
 const REMIND_BEFORE_MS = 10 * 60 * 1000;
 const POLL_MS = Number(process.env.ROOST_CALENDAR_POLL_MS || 5 * 60 * 1000);
 const LOOKAHEAD_MS = 2 * 60 * 60 * 1000;
@@ -218,19 +220,26 @@ class CalendarAccount extends GoogleAccount {
     try {
       const now = Date.now();
       const { events } = await this.listEvents({ timeMin: new Date(now).toISOString(), timeMax: new Date(now + LOOKAHEAD_MS).toISOString() });
+      if (!this.pollTimer) return; // polling was stopped while the request ran
+      const current = new Set();
       for (const ev of events) {
-        if (ev.allDay || ev.selfResponse === 'declined') continue;
+        if (ev.allDay || ev.selfResponse === 'declined' || ev.startMs <= now) continue;
         const key = `${ev.calendarId}|${ev.id}|${ev.startMs}`;
+        current.add(key);
         if (this.reminded.has(key) || this.reminderTimers.has(key)) continue;
         const delay = ev.startMs - REMIND_BEFORE_MS - now;
-        if (ev.startMs <= now) continue;
         const fire = () => {
           this.reminderTimers.delete(key);
+          if (Date.now() > ev.startMs) return; // meeting already started (e.g. Mac was asleep)
           this.reminded.add(key);
           this.emit('reminder', { calendarId: ev.calendarId, id: ev.id, summary: ev.summary || '(No title)', startMs: ev.startMs, location: ev.location });
         };
         if (delay <= 0) fire();
         else this.reminderTimers.set(key, setTimeout(fire, delay));
+      }
+      // Drop timers for events that were deleted, declined or moved.
+      for (const [key, t] of this.reminderTimers) {
+        if (!current.has(key)) { clearTimeout(t); this.reminderTimers.delete(key); }
       }
     } catch (err) {
       if (err.needsSignIn || err.needsSetup) this.stopPolling();

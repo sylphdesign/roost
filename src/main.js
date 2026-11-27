@@ -1,6 +1,6 @@
 const {
   app, BrowserWindow, WebContentsView, ipcMain, Menu, shell, session, dialog, clipboard, systemPreferences,
-  Tray, nativeImage, desktopCapturer, Notification, safeStorage,
+  Tray, nativeImage, desktopCapturer, Notification, safeStorage, powerMonitor,
 } = require('electron');
 const path = require('path');
 const fs = require('fs');
@@ -8,7 +8,10 @@ const crypto = require('crypto');
 
 const APP_NAME = 'Roost';
 
-if (process.env.ROOST_USER_DATA) app.setPath('userData', process.env.ROOST_USER_DATA);
+// ROOST_* variables are test hooks. A packaged (shipped) app ignores them all.
+function devEnv(name) { return app.isPackaged ? undefined : process.env[name]; }
+
+if (devEnv('ROOST_USER_DATA')) app.setPath('userData', devEnv('ROOST_USER_DATA'));
 
 const store = require('./store');
 const { PRESETS, GROUPS } = require('./presets');
@@ -73,11 +76,40 @@ const isHttp = (url) => /^https?:\/\//i.test(url);
 const svcById = (id) => config.services.find((s) => s.id === id);
 const svcOfSender = (wc) => svcById(byWc.get(wc.id));
 
+// --- security helpers (pure; test/main-security.test.js loads them from this file) ---
+// Real Google hosts only: google.com, google.de, google.co.uk, google.com.au … never google.attacker.com.
+function isGoogleRedirectHost(host) {
+  return /^(www\.)?google\.(com|[a-z]{2,3}|co\.[a-z]{2}|com\.[a-z]{2})$/.test(String(host || '').toLowerCase());
+}
+function isAuthHost(host) {
+  return !!host && AUTH_HOSTS.some((h) => host === h || host.endsWith(`.${h}`));
+}
+// The page at url belongs to the service (same host, "www." ignored) or is a sign-in host.
+function hostAllowedFor(url, svcUrl) {
+  const bare = (h) => h.replace(/^www\./, '');
+  const host = hostOf(url);
+  const own = hostOf(svcUrl);
+  return !!host && ((!!own && bare(host) === bare(own)) || isAuthHost(host));
+}
+// Permissions (camera, microphone, clipboard …): only the service's own site, sign-in hosts,
+// and Roost's own screens (local files inside the app).
+function permissionAllowedFor(url, svcUrl, appDir) {
+  const s = String(url || '');
+  if (/^file:/i.test(s)) {
+    try {
+      const p = require('url').fileURLToPath(s);
+      return !!appDir && (p === appDir || p.startsWith(appDir + path.sep));
+    } catch { return false; }
+  }
+  return hostAllowedFor(s, svcUrl);
+}
+// --- end security helpers ---
+
 function unwrapRedirect(url) {
   // Gmail and others wrap outgoing links, e.g. https://www.google.com/url?q=REAL
   try {
     const u = new URL(url);
-    if (/(^|\.)google\.[a-z.]+$/.test(u.hostname) && u.pathname === '/url') {
+    if (isGoogleRedirectHost(u.hostname) && u.pathname === '/url') {
       return u.searchParams.get('q') || u.searchParams.get('url') || url;
     }
   } catch { /* keep url */ }
@@ -177,7 +209,7 @@ function micHelperPath() {
   return isMac && fs.existsSync(p) ? p : null;
 }
 function startCallWatch() {
-  if (process.env.ROOST_NO_CALL_WATCH) return;
+  if (devEnv('ROOST_NO_CALL_WATCH')) return;
   const helper = micHelperPath();
   if (helper && !micWatcher) {
     micWatcher = spawn(helper, [], { stdio: ['ignore', 'pipe', 'ignore'] });
@@ -205,7 +237,7 @@ const aiFile = () => path.join(app.getPath('userData'), 'ai.json');
 function getAiKey() {
   try {
     const d = JSON.parse(fs.readFileSync(aiFile(), 'utf8'));
-    if (d.plain && process.env.ROOST_PLAIN_TOKENS) return d.plain;
+    if (d.plain && devEnv('ROOST_PLAIN_TOKENS')) return d.plain;
     if (d.enc && safeStorage.isEncryptionAvailable()) return safeStorage.decryptString(Buffer.from(d.enc, 'base64'));
   } catch { /* no key */ }
   return null;
@@ -213,11 +245,11 @@ function getAiKey() {
 function setAiKey(key) {
   const k = String(key || '').trim();
   if (!k) { fs.rmSync(aiFile(), { force: true }); return; }
-  const data = process.env.ROOST_PLAIN_TOKENS ? { plain: k }
+  const data = devEnv('ROOST_PLAIN_TOKENS') ? { plain: k }
     : { enc: safeStorage.encryptString(k).toString('base64') };
   fs.writeFileSync(aiFile(), JSON.stringify(data), { mode: 0o600 });
 }
-const aiConfigured = () => !!process.env.ROOST_AI_FAKE || !!getAiKey();
+const aiConfigured = () => !!devEnv('ROOST_AI_FAKE') || !!getAiKey();
 
 function notifyAiStatus() {
   for (const s of config.services) if (s.type === 'gmail') sendToGmailView(s.id, { type: 'ai-status', configured: aiConfigured() });
@@ -253,7 +285,7 @@ function setIconMode(svc, mode) {
 }
 
 async function pickCustomIcon(svc) {
-  let file = process.env.ROOST_TEST_ICON;
+  let file = devEnv('ROOST_TEST_ICON');
   if (!file) {
     const r = await dialog.showOpenDialog(win, {
       title: `Picture for ${svc.name}`, properties: ['openFile'],
@@ -394,13 +426,23 @@ function updateBadge() {
 
 // ---------- sessions (one per account) ----------
 
-function setupSession(ses) {
+function setupSession(ses, svcId) {
   if (readySessions.has(ses)) return;
   readySessions.add(ses);
   ses.setUserAgent(CHROME_UA);
-  ses.setPermissionCheckHandler((_wc, permission) => ALLOWED_PERMISSIONS.has(permission));
-  ses.setPermissionRequestHandler(async (_wc, permission, callback, details) => {
+  // One session per service: a permission is granted only to that service's own site (or a sign-in host).
+  const originOk = (wc, ...urls) => {
+    const svcUrl = svcById(svcId)?.url;
+    let url = urls.find((u) => u && u !== 'null');
+    // No URL, or only a bare file origin ("file:///"): use the page's full URL.
+    if (!url || /^file:\/*$/i.test(url)) { try { url = wc && !wc.isDestroyed() ? wc.getURL() : ''; } catch { url = ''; } }
+    return !!svcUrl && permissionAllowedFor(url, svcUrl, __dirname);
+  };
+  ses.setPermissionCheckHandler((wc, permission, requestingOrigin, details) =>
+    ALLOWED_PERMISSIONS.has(permission) && originOk(wc, details?.requestingUrl, requestingOrigin));
+  ses.setPermissionRequestHandler(async (wc, permission, callback, details) => {
     if (!ALLOWED_PERMISSIONS.has(permission)) return callback(false);
+    if (!originOk(wc, details?.requestingUrl, details?.requestingOrigin)) return callback(false);
     if (permission === 'media' && isMac) {
       const types = details.mediaTypes || [];
       try {
@@ -460,10 +502,9 @@ function attachWindowRules(wc, svc) {
   wc.setWindowOpenHandler(({ url }) => {
     const target = unwrapRedirect(url);
     if (svcById(svc.id)?.mode === 'api') { openExternal(target); return { action: 'deny' }; } // links in emails
-    const host = hostOf(target);
-    const sameHost = host && host === hostOf(svc.url);
-    const auth = AUTH_HOSTS.some((h) => host === h || host.endsWith(`.${h}`));
-    if (url === 'about:blank' || sameHost || auth) {
+    // Decide from the URL the popup really loads (url), not the unwrapped link (target).
+    const svcUrl = svcById(svc.id)?.url || svc.url;
+    if (url === 'about:blank' || hostAllowedFor(url, svcUrl)) {
       return {
         action: 'allow',
         overrideBrowserWindowOptions: { width: 1000, height: 760, autoHideMenuBar: true },
@@ -474,6 +515,14 @@ function attachWindowRules(wc, svc) {
   });
   wc.on('did-create-window', (child) => {
     const cwc = child.webContents;
+    // A popup may go only to the service's own site or a sign-in host. An about:blank popup that
+    // later moves to a sign-in host (OAuth for Slack, Discord …) still works. Anything else opens in the browser.
+    // No 'will-redirect' check: sign-in chains redirect through hosts we cannot list (company SSO, Okta …).
+    cwc.on('will-navigate', (e, url) => {
+      if (url === 'about:blank' || hostAllowedFor(url, svcById(svc.id)?.url || svc.url)) return;
+      e.preventDefault();
+      openExternal(unwrapRedirect(url));
+    });
     cwc.on('did-navigate', (_e, url) => {
       if (hostOf(url) === 'accounts.google.com' && /\/signin\/rejected/.test(url)) {
         const main = views.get(svc.id)?.view.webContents;
@@ -491,7 +540,7 @@ function attachWindowRules(wc, svc) {
 
 function createView(svc) {
   const partition = `persist:svc-${svc.id}`;
-  setupSession(session.fromPartition(partition));
+  setupSession(session.fromPartition(partition), svc.id);
   const view = new WebContentsView({
     webPreferences: {
       partition,
@@ -563,7 +612,7 @@ function createView(svc) {
     startGmail(svc);
   } else if (svc.mode === 'window' && chromePath) {
     wc.loadURL(windowPanelPage(svc, entry)).catch(() => {});
-    startAccount(svc, { open: !process.env.ROOST_NO_WINDOWS });
+    startAccount(svc, { open: !devEnv('ROOST_NO_WINDOWS') });
   } else {
     wc.loadURL(svc.url).catch(() => { /* failed loads show our offline page */ });
   }
@@ -776,12 +825,12 @@ async function stopAccount(idOrKey) {
 
 const gmailDeps = {
   openExternal: (url) => {
-    if (process.env.ROOST_OAUTH_AUTO && !app.isPackaged) { fetch(url).catch(() => {}); return; } // tests: follow the sign-in redirect directly
+    if (devEnv('ROOST_OAUTH_AUTO') && !app.isPackaged) { fetch(url).catch(() => {}); return; } // tests: follow the sign-in redirect directly
     shell.openExternal(url);
   },
   showOpenDialog: async () => {
-    if (process.env.ROOST_TEST_ATTACH) {
-      return process.env.ROOST_TEST_ATTACH.split(',').map((f) => ({ path: f, name: path.basename(f), size: fs.statSync(f).size }));
+    if (devEnv('ROOST_TEST_ATTACH')) {
+      return devEnv('ROOST_TEST_ATTACH').split(',').map((f) => ({ path: f, name: path.basename(f), size: fs.statSync(f).size }));
     }
     const r = await dialog.showOpenDialog(win, { properties: ['openFile', 'multiSelections'] });
     if (r.canceled) return [];
@@ -789,12 +838,33 @@ const gmailDeps = {
   },
   showSaveDialog: async (filename) => {
     const safeName = path.basename(String(filename || 'attachment')) || 'attachment';
-    if (process.env.ROOST_TEST_SAVE_DIR) return path.join(process.env.ROOST_TEST_SAVE_DIR, safeName);
+    if (devEnv('ROOST_TEST_SAVE_DIR')) return path.join(devEnv('ROOST_TEST_SAVE_DIR'), safeName);
     const r = await dialog.showSaveDialog(win, { defaultPath: path.join(app.getPath('downloads'), safeName) });
     return r.canceled ? null : r.filePath;
   },
   readFile: (f) => fs.promises.readFile(f),
 };
+
+// Keep each shown notification alive. Without a reference, garbage collection can drop it and its click handler.
+const liveNotifications = new Set();
+function keepNotification(n) {
+  liveNotifications.add(n);
+  const drop = () => liveNotifications.delete(n);
+  n.on('click', drop);
+  n.on('close', drop);
+}
+
+// After sleep, timers may be late: check mail and calendar reminders now for every signed-in account.
+function refreshApiAccountsAfterResume() {
+  for (const acc of gmailAccounts.values()) {
+    try {
+      if (typeof acc.status === 'function' && !acc.status().signedIn) continue;
+      const run = typeof acc.scheduleReminders === 'function' ? acc.scheduleReminders()
+        : typeof acc.poll === 'function' ? acc.poll() : null;
+      if (run && typeof run.catch === 'function') run.catch(() => {});
+    } catch { /* one account failing must not stop the others */ }
+  }
+}
 
 function sendToGmailView(key, event) {
   if (!isCurrentKey(key)) return; // an account the top bar does not show right now
@@ -827,12 +897,13 @@ function startGmail(svc) {
     const policy = notifyPolicy(current);
     if (!current || !policy.show || !Notification.isSupported()) return;
     const n = new Notification({ title: from || 'New email', subtitle: current.name, body: subject, silent: policy.silent });
-    if (process.env.ROOST_E2E_SCRIPT) (global.roostE2EEvents ||= []).push({ type: 'notification', title: n.title, body: n.body });
+    if (devEnv('ROOST_E2E_SCRIPT')) (global.roostE2EEvents ||= []).push({ type: 'notification', title: n.title, body: n.body });
     n.on('click', () => {
       showWindow();
       select(svc.id);
       if (threadId) sendToGmailView(key, { type: 'open-thread', threadId });
     });
+    keepNotification(n);
     n.show();
   });
   acc.on('reminder', ({ calendarId, id, summary, startMs, location }) => {
@@ -843,7 +914,7 @@ function startGmail(svc) {
     const time = new Date(startMs).toLocaleTimeString([], { hour: 'numeric', minute: '2-digit' });
     const who = emailOfKey(key);
     const n = new Notification({ title: summary, subtitle: who ? `${current.name} · ${who}` : current.name, body: `${mins ? `In ${mins} min` : 'Now'} · ${time}${location ? ` · ${location}` : ''}`, silent: policy.silent });
-    if (process.env.ROOST_E2E_SCRIPT) (global.roostE2EEvents ||= []).push({ type: 'notification', title: n.title, body: n.body });
+    if (devEnv('ROOST_E2E_SCRIPT')) (global.roostE2EEvents ||= []).push({ type: 'notification', title: n.title, body: n.body });
     n.on('click', () => {
       showWindow();
       const mail = who && mailServices().find((s) => mailEmailOf(s.id) === who);
@@ -851,6 +922,7 @@ function startGmail(svc) {
       select(svc.id);
       sendToGmailView(key, { type: 'open-event', calendarId, id });
     });
+    keepNotification(n);
     n.show();
   });
   acc.startPolling();
@@ -1221,7 +1293,7 @@ function createWindow() {
   });
   win.loadFile(path.join(__dirname, 'ui', 'index.html'));
   const atLogin = isMac && app.getLoginItemSettings().wasOpenedAtLogin;
-  win.once('ready-to-show', () => { if (!process.env.ROOST_HIDDEN && !atLogin) win.show(); });
+  win.once('ready-to-show', () => { if (!devEnv('ROOST_HIDDEN') && !atLogin) win.show(); });
   win.on('resize', () => { layout(); saveBounds(); });
   win.on('move', saveBounds);
   win.on('close', (e) => {
@@ -1436,7 +1508,7 @@ async function handleApiCall(channel, e, method, args) {
       const clientId = String(a.clientId || '').trim();
       const clientSecret = String(a.clientSecret || '').trim();
       if (!clientId || !clientSecret) throw new Error('Paste both the Client ID and the Client secret.');
-      if (!/\.apps\.googleusercontent\.com$/.test(clientId) && !(process.env.ROOST_GOOGLE_AUTH_URL && !app.isPackaged)) {
+      if (!/\.apps\.googleusercontent\.com$/.test(clientId) && !(devEnv('ROOST_GOOGLE_AUTH_URL') && !app.isPackaged)) {
         throw new Error('That does not look like a Google Client ID (it ends with .apps.googleusercontent.com).');
       }
       gmailStore.setClient(clientId, clientSecret);
@@ -1555,8 +1627,8 @@ if (!app.requestSingleInstanceLock()) {
       gmailStore.removeAccount(s.id);
     }
     lastLinked = null;
-    if (process.env.ROOST_SEED && !config.services.length) {
-      for (const type of String(process.env.ROOST_SEED).split(',')) {
+    if (devEnv('ROOST_SEED') && !config.services.length) {
+      for (const type of String(devEnv('ROOST_SEED')).split(',')) {
         const p = PRESETS.find((x) => x.type === type);
         if (p) config.services.push({ id: crypto.randomUUID().slice(0, 8), type: p.type, name: p.name, url: p.url, color: p.color, muted: false, group: p.group, ...(API_APPS[p.type] ? { mode: 'api' } : p.googleWindow && chromePath ? { mode: 'window' } : {}) });
       }
@@ -1568,12 +1640,13 @@ if (!app.requestSingleInstanceLock()) {
     startCallWatch();
     win.on('focus', applyAudio);
     win.on('blur', applyAudio);
+    powerMonitor.on('resume', () => { try { refreshApiAccountsAfterResume(); } catch { /* keep running */ } });
     // Google account windows may open on start; keep Roost in front of them.
     if (config.services.some((s) => s.mode === 'window')) {
       setTimeout(() => { if (win && win.isVisible()) { app.focus({ steal: true }); win.focus(); } }, 2500);
     }
-    if (process.env.ROOST_SMOKE) runSmoke(process.env.ROOST_SMOKE);
-    if (process.env.ROOST_E2E_SCRIPT) require(process.env.ROOST_E2E_SCRIPT)({ app, win, getState: publicState, test: { setInCall: (v) => { inCall = !!v; quietChanged(); }, notifyPolicy: (id) => notifyPolicy(svcById(id)), isAudioMuted: (id) => views.get(id)?.view.webContents.isAudioMuted(), viewBounds: (id) => views.get(id)?.view.getBounds(), viewWc: (id) => views.get(id)?.view.webContents, getAiKey, orderedIds: () => orderedServices().map((s) => s.id), pickIcon: (id) => pickCustomIcon(svcById(id)), setIconMode: (id, m) => setIconMode(svcById(id), m) }, quit: () => { quitting = true; app.quit(); } });
+    if (devEnv('ROOST_SMOKE')) runSmoke(devEnv('ROOST_SMOKE'));
+    if (devEnv('ROOST_E2E_SCRIPT')) require(devEnv('ROOST_E2E_SCRIPT'))({ app, win, getState: publicState, test: { setInCall: (v) => { inCall = !!v; quietChanged(); }, notifyPolicy: (id) => notifyPolicy(svcById(id)), isAudioMuted: (id) => views.get(id)?.view.webContents.isAudioMuted(), viewBounds: (id) => views.get(id)?.view.getBounds(), viewWc: (id) => views.get(id)?.view.webContents, getAiKey, orderedIds: () => orderedServices().map((s) => s.id), pickIcon: (id) => pickCustomIcon(svcById(id)), setIconMode: (id, m) => setIconMode(svcById(id), m) }, quit: () => { quitting = true; app.quit(); } });
   });
   app.on('activate', showWindow);
   let accountsClosed = false;
@@ -1603,7 +1676,7 @@ async function safeShot(wc, file) {
 
 async function runSmoke(dir) {
   fs.mkdirSync(dir, { recursive: true });
-  await new Promise((r) => setTimeout(r, Number(process.env.ROOST_SMOKE_WAIT || 12000)));
+  await new Promise((r) => setTimeout(r, Number(devEnv('ROOST_SMOKE_WAIT') || 12000)));
   const report = { services: [] };
   await safeShot(win.webContents, path.join(dir, 'ui.png'));
   for (const s of config.services) {

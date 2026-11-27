@@ -2399,9 +2399,9 @@
     if (ac.loading) return ac.loading;
     ac.loading = call('listContacts').then((r) => {
       ac.loading = null;
-      ac.contacts = r && r.ok && Array.isArray(r.contacts) ? r.contacts : [];
-      if (ac.input && document.activeElement === ac.input) updateSuggest(ac.input);
-      return ac.contacts;
+      ac.contacts = r && r.ok && Array.isArray(r.contacts) ? r.contacts : null; // null on failure: retry next time
+      if (ac.contacts && ac.input && document.activeElement === ac.input) updateSuggest(ac.input); // not on failure, or it would loop
+      return ac.contacts || [];
     });
     return ac.loading;
   }

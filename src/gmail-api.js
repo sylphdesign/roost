@@ -10,13 +10,19 @@ const http = require('http');
 const path = require('path');
 const { EventEmitter } = require('events');
 
+// Test hooks (fake Google servers, plain tokens) work only outside a packaged app.
+// In plain node tests require('electron') is not the Electron API: then this is false.
+const IS_PACKAGED = (() => { try { return require('electron').app?.isPackaged === true; } catch { return false; } })();
+const testEnv = (name) => (IS_PACKAGED ? undefined : process.env[name]);
+
 const SCOPE = 'https://www.googleapis.com/auth/gmail.modify';
 const ENDPOINTS = {
-  auth: process.env.ROOST_GOOGLE_AUTH_URL || 'https://accounts.google.com/o/oauth2/v2/auth',
-  token: process.env.ROOST_GOOGLE_TOKEN_URL || 'https://oauth2.googleapis.com/token',
-  revoke: process.env.ROOST_GOOGLE_REVOKE_URL || 'https://oauth2.googleapis.com/revoke',
-  api: process.env.ROOST_GMAIL_API_BASE || 'https://gmail.googleapis.com',
+  auth: testEnv('ROOST_GOOGLE_AUTH_URL') || 'https://accounts.google.com/o/oauth2/v2/auth',
+  token: testEnv('ROOST_GOOGLE_TOKEN_URL') || 'https://oauth2.googleapis.com/token',
+  revoke: testEnv('ROOST_GOOGLE_REVOKE_URL') || 'https://oauth2.googleapis.com/revoke',
+  api: testEnv('ROOST_GMAIL_API_BASE') || 'https://gmail.googleapis.com',
 };
+const FETCH_TIMEOUT_MS = 30000;
 const POLL_MS = Number(process.env.ROOST_GMAIL_POLL_MS || 60000);
 const MAX_SEND_BYTES = 20 * 1024 * 1024;
 
@@ -132,8 +138,8 @@ function buildRawMessage({ from, to, cc, bcc, subject, body, html, inReplyTo, re
   push('Cc', encodeAddressList(cc));
   push('Bcc', encodeAddressList(bcc));
   push('Subject', encodeHeaderValue(subject || ''));
-  push('In-Reply-To', inReplyTo);
-  push('References', references);
+  push('In-Reply-To', String(inReplyTo || '').replace(/[\r\n]+/g, ' ').trim());
+  push('References', String(references || '').replace(/[\r\n]+/g, ' ').trim());
   push('MIME-Version', '1.0');
   const plainPart = ['Content-Type: text/plain; charset="UTF-8"', 'Content-Transfer-Encoding: base64', '',
     wrap76(Buffer.from(String(body || '').replace(/\r?\n/g, '\r\n'), 'utf8').toString('base64'))];
@@ -217,7 +223,7 @@ class ApiError extends Error {
 class GmailStore {
   constructor(file, safeStorage) {
     this.file = file;
-    this.safe = !process.env.ROOST_PLAIN_TOKENS && safeStorage && safeStorage.isEncryptionAvailable() ? safeStorage : null;
+    this.safe = !testEnv('ROOST_PLAIN_TOKENS') && safeStorage && safeStorage.isEncryptionAvailable() ? safeStorage : null;
     this.data = { client: null, accounts: {} };
     try { this.data = { client: null, accounts: {}, ...JSON.parse(fs.readFileSync(file, 'utf8')) }; } catch { /* first run */ }
   }
@@ -370,8 +376,20 @@ display:grid;place-items:center;height:90vh;background:#15151c;color:#ececf1"><d
 
   cancelSignIn() { if (this.signInAbort) this.signInAbort(); }
 
+  // fetch with a time limit: a hanging connection must not block every later call.
+  async fetchWithTimeout(url, opts) {
+    try {
+      return await fetch(url, { ...opts, signal: AbortSignal.timeout(this.fetchTimeoutMs ?? FETCH_TIMEOUT_MS) });
+    } catch (err) {
+      if (err && (err.name === 'TimeoutError' || err.name === 'AbortError')) {
+        throw new ApiError('Google did not answer in time. Check your internet connection, then try again.', { status: 0 });
+      }
+      throw err; // other network errors: as before
+    }
+  }
+
   async tokenRequest(params) {
-    const res = await fetch(ENDPOINTS.token, {
+    const res = await this.fetchWithTimeout(ENDPOINTS.token, {
       method: 'POST', headers: { 'content-type': 'application/x-www-form-urlencoded' }, body: new URLSearchParams(params),
     });
     const json = await res.json().catch(() => ({}));
@@ -385,18 +403,36 @@ display:grid;place-items:center;height:90vh;background:#15151c;color:#ececf1"><d
 
   async accessToken(force = false) {
     if (!force && this.access && this.access.expires > Date.now()) return this.access.token;
+    // Parallel callers share one refresh.
+    if (this.refreshing) return this.refreshing;
     const client = this.store.getClient();
     const acc = this.account();
     if (!client) throw new ApiError('Add your Google key first.', { needsSetup: true });
     if (!acc || !acc.refreshToken) throw new ApiError('Please sign in.', { needsSignIn: true });
-    try {
-      const t = await this.tokenRequest({ grant_type: 'refresh_token', refresh_token: acc.refreshToken, client_id: client.id, client_secret: client.secret });
-      this.access = { token: t.access_token, expires: Date.now() + (t.expires_in - 60) * 1000 };
-      return this.access.token;
-    } catch (err) {
-      if (err.needsSignIn) { this.forgetTokens(); }
-      throw err;
-    }
+    const used = acc.refreshToken;
+    const stillSame = () => this.account()?.refreshToken === used;
+    const run = (async () => {
+      try {
+        const t = await this.tokenRequest({ grant_type: 'refresh_token', refresh_token: used, client_id: client.id, client_secret: client.secret });
+        const access = { token: t.access_token, expires: Date.now() + (t.expires_in - 60) * 1000 };
+        if (stillSame()) this.access = access; // a newer sign-in keeps its own key
+        return access.token;
+      } catch (err) {
+        // A late "invalid_grant" for an old key must not end a newer sign-in.
+        if (err.needsSignIn && stillSame()) this.forgetTokens();
+        throw err;
+      } finally {
+        if (this.refreshing === run) this.refreshing = null;
+      }
+    })();
+    this.refreshing = run;
+    return run;
+  }
+
+  clearCaches() {
+    this.contactsCache = null;
+    this.summaryCache = null;
+    this.unreadPrimary = undefined;
   }
 
   forgetTokens() {
@@ -406,25 +442,36 @@ display:grid;place-items:center;height:90vh;background:#15151c;color:#ececf1"><d
     if (acc) this.store.setAccount(this.serviceId, { email: acc.email, refreshToken: '' });
     this.emit('auth', this.status());
     this.setUnread(0);
+    this.clearCaches();
   }
 
   async signOut({ revoke = true } = {}) {
     const acc = this.account();
     this.stopPolling();
     if (revoke && acc && acc.refreshToken) {
-      await fetch(`${ENDPOINTS.revoke}?token=${encodeURIComponent(acc.refreshToken)}`, { method: 'POST' }).catch(() => {});
+      await this.fetchWithTimeout(`${ENDPOINTS.revoke}?token=${encodeURIComponent(acc.refreshToken)}`, { method: 'POST' }).catch(() => {});
     }
     this.access = null;
     this.store.removeAccount(this.serviceId);
     this.setUnread(0);
+    this.clearCaches();
     this.emit('auth', this.status());
   }
 
   // ----- REST -----
 
   // Wait until the call fits in the per-second budget. Calls take their turn one by one.
+  // Calls with no cost (other Google APIs) use no budget, but they still wait out a "too fast" pause.
+  async waitForPause() {
+    for (;;) {
+      const now = Date.now();
+      if (!(this.quotaPausedUntil > now)) return;
+      await sleep(this.quotaPausedUntil - now);
+    }
+  }
+
   takeQuota(cost) {
-    if (!cost) return Promise.resolve();
+    if (!cost) return this.waitForPause();
     const rate = this.quotaRate || QUOTA_RATE;
     const turn = (this.quotaQueue || Promise.resolve()).then(async () => {
       for (;;) {
@@ -450,7 +497,7 @@ display:grid;place-items:center;height:90vh;background:#15151c;color:#ececf1"><d
       if (Array.isArray(v)) v.forEach((x) => url.searchParams.append(k, x));
       else url.searchParams.set(k, String(v));
     }
-    const res = await fetch(url, {
+    const res = await this.fetchWithTimeout(url, {
       method,
       headers: { authorization: `Bearer ${token}`, ...(body ? { 'content-type': 'application/json' } : {}) },
       body: body ? JSON.stringify(body) : undefined,
@@ -469,9 +516,11 @@ display:grid;place-items:center;height:90vh;background:#15151c;color:#ececf1"><d
         const wait = after > 0 ? after * 1000 : base * 2 ** attempt + Math.random() * base;
         this.quotaPausedUntil = Math.max(this.quotaPausedUntil || 0, Date.now() + wait);
         this.quotaTokens = 0;
+        this.quotaAt = this.quotaPausedUntil; // the budget fills again only after the pause
         return this.api(method, apiPath, { query, body, retried, attempt: attempt + 1 });
       }
-      throw new ApiError('Gmail is busy: too many requests in a short time. Wait one minute, then try again.', { status: 429 });
+      const who = apiPath.startsWith('/gmail/') ? 'Gmail' : apiPath.startsWith('/calendar/') ? 'Google Calendar' : 'Google';
+      throw new ApiError(`${who} is busy: too many requests in a short time. Wait one minute, then try again.`, { status: 429 });
     }
     if (!res.ok) {
       const msg = json.error?.message || `Gmail error ${res.status}`;
@@ -659,6 +708,7 @@ class GmailAccount extends GoogleAccount {
   // Built from your own mail headers, so it needs no extra Google permission. Cached for 30 minutes.
   async listContacts({ refresh } = {}) {
     if (!refresh && this.contactsCache && Date.now() - this.contactsCache.at < 30 * 60 * 1000) return { contacts: this.contactsCache.list };
+    let failed = false; // a scan failed: give back what we have, but do not keep it for 30 minutes
     const me = String(this.account()?.email || '').toLowerCase();
     const book = new Map();
     const add = (value, weight, ts) => {
@@ -676,9 +726,9 @@ class GmailAccount extends GoogleAccount {
       }
     };
     const scan = async (labelId, max, headers, weight) => {
-      const list = await this.api('GET', '/gmail/v1/users/me/messages', { query: { labelIds: [labelId], maxResults: max } }).catch(() => ({}));
+      const list = await this.api('GET', '/gmail/v1/users/me/messages', { query: { labelIds: [labelId], maxResults: max } }).catch(() => { failed = true; return {}; });
       await mapLimit(list.messages || [], 3, async (m) => {
-        const meta = await this.api('GET', `/gmail/v1/users/me/messages/${m.id}`, { query: { format: 'metadata', metadataHeaders: headers } }).catch(() => null);
+        const meta = await this.api('GET', `/gmail/v1/users/me/messages/${m.id}`, { query: { format: 'metadata', metadataHeaders: headers } }).catch(() => { failed = true; return null; });
         if (!meta) return;
         const h = meta.payload?.headers || [];
         const ts = Number(meta.internalDate) || 0;
@@ -688,6 +738,7 @@ class GmailAccount extends GoogleAccount {
     await Promise.all([scan('SENT', 150, ['To', 'Cc', 'Bcc'], 3), scan('INBOX', 100, ['From', 'Cc'], 1)]);
     const list = [...book.values()].sort((a, b) => b.score - a.score || b.last - a.last).slice(0, 500)
       .map(({ email, name, score }) => ({ email, name, score }));
+    if (failed) return { contacts: list, partial: true };
     this.contactsCache = { at: Date.now(), list };
     return { contacts: list };
   }
@@ -749,7 +800,18 @@ class GmailAccount extends GoogleAccount {
 
   stopPolling() { clearInterval(this.pollTimer); this.pollTimer = null; }
 
+  // One poll at a time: a slow poll and the next timer tick must not report the same new mail twice.
   async poll() {
+    if (this.pollBusy) return;
+    this.pollBusy = true;
+    try {
+      await this.pollOnce();
+    } finally {
+      this.pollBusy = false;
+    }
+  }
+
+  async pollOnce() {
     try {
       if (!this.historyId) {
         const p = await this.api('GET', '/gmail/v1/users/me/profile');

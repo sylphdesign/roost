@@ -81,3 +81,15 @@ test('complete task through the API returns raw continuation (empty allowed)', a
     assert.deepStrictEqual(r, { text: '' });
   } finally { fc.server.close(); }
 });
+
+test('complete uses the cheap model, small max_tokens; other tasks keep the big model', async () => {
+  const fc = await fakeClaude(' and thanks.');
+  try {
+    await runAiTask({ task: 'complete', draft: 'Hello' }, { getKey: () => 'sk-test', fake: false, baseURL: fc.url });
+    await runAiTask({ task: 'write', prompt: 'say hi' }, { getKey: () => 'sk-test', fake: false, baseURL: fc.url });
+    assert.strictEqual(fc.seen[0].body.model, 'claude-haiku-5-5');
+    assert.ok(fc.seen[0].body.max_tokens <= 64);
+    assert.strictEqual(fc.seen[1].body.model, 'claude-opus-5-5');
+    assert.ok(fc.seen[1].body.max_tokens > 1000);
+  } finally { fc.server.close(); }
+});
