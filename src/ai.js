@@ -4,6 +4,8 @@
 const Anthropic = require('@anthropic-ai/sdk');
 
 const MODEL = 'claude-opus-5-5';
+const COMPLETE_MODEL = 'claude-haiku-5-5'; // Smart Compose: cheap and fast
+const IS_PACKAGED = (() => { try { return require('electron').app?.isPackaged === true; } catch { return false; } })();
 const STYLES = {
   polish: 'Polish it: fix grammar, make it clear and natural. Keep the meaning, tone and length.',
   formal: 'Make it more formal and professional.',
@@ -106,18 +108,19 @@ function fakeAnswer(a) {
 }
 
 // getKey() returns the saved API key or null.
-async function runAiTask(args, { getKey, fake = !!process.env.ROOST_AI_FAKE, baseURL = process.env.ROOST_ANTHROPIC_BASE_URL } = {}) {
+async function runAiTask(args, { getKey, fake = !IS_PACKAGED && !!process.env.ROOST_AI_FAKE, baseURL = IS_PACKAGED ? undefined : process.env.ROOST_ANTHROPIC_BASE_URL } = {}) {
   const a = args && typeof args === 'object' ? args : {};
   const userPrompt = buildPrompt(a); // validates first
   if (fake) return fakeAnswer(a);
   const apiKey = getKey();
   if (!apiKey) throw new AiError('Add your Claude API key in Roost Settings to use AI writing.', { needsAiKey: true });
-  const client = new Anthropic({ apiKey, ...(baseURL ? { baseURL } : {}), maxRetries: 1, timeout: 120000 });
+  const complete = a.task === 'complete';
+  const client = new Anthropic({ apiKey, ...(baseURL ? { baseURL } : {}), maxRetries: 1, timeout: complete ? 15000 : 120000 });
   let msg;
   try {
     msg = await client.beta.messages.create({
-      model: MODEL,
-      max_tokens: 16000,
+      model: complete ? COMPLETE_MODEL : MODEL,
+      max_tokens: complete ? 64 : 16000,
       output_config: { effort: 'low' }, // short writing tasks: fast answers
       betas: ['server-side-fallback-2026-07-01'],
       fallbacks: 'default',

@@ -1,5 +1,27 @@
 # Changelog
 
+## 0.2.2 — 2026-11-27
+
+Safety and reliability fixes.
+
+### Safer
+- **Links cannot open fake pages inside Roost.** A link like `google.attacker.com/url?q=…` is no longer seen as a Google link. Roost decides about a popup from the page that really loads. A popup can only go to the app's own site or a sign-in page; other pages open in your browser.
+- **Camera, microphone and clipboard only for the app's own site.** Other sites inside an app get no permissions.
+- **Test settings do nothing in the installed app.** The `ROOST_*` environment variables (for tests) are ignored when Roost is packaged, so they cannot send your keys to another server.
+- Reply headers (In-Reply-To, References) cannot add extra lines to a sent email.
+
+### Fixed
+- **Calendar reminders are correct.** A moved, deleted or declined meeting no longer gives an old reminder. After your Mac sleeps, Roost does not show a reminder for a meeting that already started, and it checks mail and reminders again when the Mac wakes.
+- **No double new-mail alerts.** Mail checks cannot overlap. A Google request that gets no answer stops after 30 seconds, with a clear message.
+- **Rate limit:** after Google says "too fast", Roost starts slowly again, not with a full burst. Calendar now also waits before it tries again, and the message names the right service.
+- **Recipient autofill** tries again when loading contacts fails, and Roost does not keep a partial contact list.
+- **Sign-out clears** the contact list and summaries of that account.
+- **Sign-in:** parallel requests share one token refresh, and a late error cannot sign you out right after you sign in.
+- Notification clicks always open the email or event.
+
+### Changed
+- **Smart Compose uses Claude Haiku** with short replies. It costs much less than before. Other AI writing still uses Claude Opus.
+
 ## 0.2.1 — 2026-11-12
 
 A fix for Gmail's "Quota exceeded" error.

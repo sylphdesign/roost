@@ -113,3 +113,55 @@ test('refreshes an expired access token', async () => {
   const { calendars } = await acc.listCalendars();
   assert.strictEqual(calendars.length, 3);
 });
+
+// ----- reminder scheduling (stubbed events, fake timers) -----
+function reminderAcc(getEvents) {
+  const { CalendarAccount } = require('../src/google-calendar');
+  const a = new CalendarAccount({ serviceId: 'cal-rem', store: acc.store, deps: {} });
+  a.listEvents = async () => ({ events: getEvents() });
+  a.pollTimer = {}; // pretend polling is running
+  const got = [];
+  a.on('reminder', (r) => got.push(r));
+  return { a, got };
+}
+const mkEv = (id, startMs) => ({ calendarId: 'primary', id, summary: id, startMs, allDay: false });
+
+test('reminders: a moved or deleted event clears its stale timer; moved event fires once at the new time', async (t) => {
+  t.mock.timers.enable({ apis: ['setTimeout', 'Date'], now: 1_000_000 });
+  let events = [mkEv('a', 1_000_000 + 30 * 60000), mkEv('gone', 1_000_000 + 40 * 60000)];
+  const { a, got } = reminderAcc(() => events);
+  await a.scheduleReminders();
+  assert.strictEqual(a.reminderTimers.size, 2);
+  events = [mkEv('a', 1_000_000 + 60 * 60000)]; // a moved later, gone deleted
+  await a.scheduleReminders();
+  assert.strictEqual(a.reminderTimers.size, 1, 'stale timers cleared');
+  t.mock.timers.tick(20 * 60000 + 1); // old reminder time for a
+  t.mock.timers.tick(15 * 60000);
+  assert.strictEqual(got.length, 0, 'nothing fires at the old times');
+  t.mock.timers.tick(15 * 60000); // now at 50 min: 10 min before the new start
+  assert.deepStrictEqual(got.map((r) => r.id), ['a']);
+  assert.strictEqual(got[0].startMs, 1_000_000 + 60 * 60000);
+  a.stopPolling();
+});
+
+test('reminders: fire is skipped when the meeting already started', async (t) => {
+  t.mock.timers.enable({ apis: ['setTimeout', 'Date'], now: 2_000_000 });
+  const start = 2_000_000 + 20 * 60000;
+  const { a, got } = reminderAcc(() => [mkEv('late', start)]);
+  await a.scheduleReminders();
+  assert.strictEqual(a.reminderTimers.size, 1);
+  // Mac slept: the clock jumped past the start before the timer ran.
+  t.mock.timers.setTime(start + 5000);
+  t.mock.timers.tick(30 * 60000);
+  assert.strictEqual(got.length, 0);
+  a.stopPolling();
+});
+
+test('reminders: nothing is scheduled after polling stopped', async (t) => {
+  t.mock.timers.enable({ apis: ['setTimeout', 'Date'], now: 3_000_000 });
+  const { a } = reminderAcc(() => [mkEv('x', 3_000_000 + 30 * 60000)]);
+  const p = a.scheduleReminders();
+  a.stopPolling();
+  await p;
+  assert.strictEqual(a.reminderTimers.size, 0);
+});
