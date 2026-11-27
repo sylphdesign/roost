@@ -74,6 +74,20 @@ module.exports = async ({ win, quit }) => {
       && !document.getElementById('s-mv-preview').checked && !document.getElementById('s-mv-labels').checked && document.getElementById('s-mv-width').value === 'wide';`));
     await ui(`const s = document.getElementById('s-mv-labels'); s.click(); return true;`);
     step('changing a choice in Settings applies at once', await until(`${H} return vis('col-labels');`));
+    await ui(`document.getElementById('settings-btn').click(); return true;`); // close Settings
+    await wait(400);
+
+    // A smaller window (email view 940 px wide, as on a 1024 px screen): the labels become a drawer.
+    // Emulate the page size: a test window behind other windows may not pass a real resize to the page.
+    wc.enableDeviceEmulation({ screenPosition: 'desktop', screenSize: { width: 940, height: 760 }, viewSize: { width: 940, height: 760 }, deviceScaleFactor: 0, scale: 1 });
+    step('small window: the email view is narrow', await until(`return window.innerWidth <= 960;`), await js('return window.innerWidth;'));
+    await setView({ pane: 'right', listWidth: 'wide', labels: true });
+    step('small window: List width Wide still applies', await until(`${H} return Math.round(box('col-list').width) === 500 && box('col-reader').width > 300;`),
+      await js(`${H} return [window.innerWidth, box('col-list').width, box('col-reader').width];`));
+    await setView({ pane: 'below' });
+    step('small window: Under the list puts the email below', await until(`${H} return vis('col-list') && vis('col-reader') && box('col-reader').top >= box('col-list').bottom - 1 && box('col-reader').width > 800;`),
+      await js(`${H} return [box('col-list'), box('col-reader')].map((b) => [b.left, b.top, b.width, b.height].map(Math.round));`));
+    wc.disableDeviceEmulation();
   } catch (err) {
     step('no crash', false, String(err && err.stack || err));
   }

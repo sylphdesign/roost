@@ -595,7 +595,8 @@ button.chip:hover { background: var(--raised); border-color: #3a3a48; }
   }
   .mail.drawer-open .col-labels { transform: none; }
   .drawer-backdrop { position: fixed; inset: 0; z-index: 19; background: rgba(0, 0, 0, 0.4); }
-  .col-list { width: 340px; }
+  /* Keep the List width setting, but leave room for the email. */
+  .col-list { width: min(var(--list-w, 340px), 55%); }
 }
 
 /* Narrow: one pane at a time */
@@ -659,6 +660,10 @@ button.chip:hover { background: var(--raised); border-color: #3a3a48; }
   .mail.pane-below .col-reader { min-height: 0; }
   .mail.pane-below.labels-hidden { grid-template-columns: minmax(0, 1fr); }
   .mail.pane-below.list-collapsed { grid-template-rows: minmax(0, 1fr); }
+}
+/* 761-980 px: the labels are a slide-out drawer (not in the grid), so "Under the list" has one column. */
+@media (min-width: 761px) and (max-width: 980px) {
+  .mail.pane-below { grid-template-columns: minmax(0, 1fr); }
 }
 
 /* ----- Setup wizard (Connect Gmail) ----- */
