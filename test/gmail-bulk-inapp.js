@@ -36,7 +36,7 @@ module.exports = async ({ quit }) => {
 
     await js(`${H} const r = rows(); for (const i of [0, 1, 2]) { const c = r[i].querySelector('.row-check'); c.checked = true; c.dispatchEvent(new Event('change')); } return true;`);
     step('ticking 3 rows shows "3 selected"', await until(`return !document.getElementById('bulk-bar').hidden && /3 selected/.test(document.getElementById('bulk-bar').textContent);`));
-    step('the bar and tick boxes are drawn on screen', await js(`${H} const b = document.getElementById('bulk-bar');
+    step('the bar and tick boxes are drawn on screen', await until(`${H} const b = document.getElementById('bulk-bar');
       return b.offsetHeight > 20 && b.getBoundingClientRect().top < rows()[0].getBoundingClientRect().top
         && rows().every((r) => getComputedStyle(r.querySelector('.row-check')).opacity === '1') && rows()[0].querySelector('.row-check').offsetWidth > 10;`),
       await js(`${H} const b = document.getElementById('bulk-bar'); return { h: b.offsetHeight, op: getComputedStyle(rows()[5].querySelector('.row-check')).opacity };`));
