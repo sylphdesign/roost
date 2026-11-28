@@ -25,7 +25,13 @@ node --version
 
 ### Intel Mac?
 
-The scripts build for arm64 only. On an Intel Mac, open `package.json` and change `arm64` to `x64` in the `build:native`, `dist` and `pack` scripts. This is not tested.
+`npm run dist` and `npm run pack` build for Apple Silicon only. To build one app that runs on both Intel and Apple Silicon Macs, use:
+
+```bash
+npm run dist:universal
+```
+
+Result: `dist/Roost-<version>-universal.dmg`. It is about twice as big. It is not tested on an Intel Mac yet.
 
 ## Run from source (development)
 

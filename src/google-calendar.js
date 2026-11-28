@@ -5,7 +5,7 @@ const { GoogleAccount, ApiError, mapLimit } = require('./gmail-api');
 
 const CAL_SCOPE = 'https://www.googleapis.com/auth/calendar';
 // Test hook only: a packaged (shipped) app always talks to Google.
-const IS_PACKAGED = (() => { try { return require('electron').app?.isPackaged === true; } catch { return false; } })();
+const IS_PACKAGED = (() => { try { return !!process.versions.electron && require('electron').app?.isPackaged === true; } catch { return false; } })();
 const CAL_BASE = (!IS_PACKAGED && process.env.ROOST_CALENDAR_API_BASE) || 'https://www.googleapis.com';
 const REMIND_BEFORE_MS = 10 * 60 * 1000;
 const POLL_MS = Number(process.env.ROOST_CALENDAR_POLL_MS || 5 * 60 * 1000);

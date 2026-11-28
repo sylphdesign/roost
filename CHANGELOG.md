@@ -1,5 +1,22 @@
 # Changelog
 
+## 0.2.3 — 2026-11-27
+
+### Safer
+- **Only files you pick can be attached.** Roost attaches a file to an email only if you chose it in the file dialog.
+- **Google sign-ins are never saved as plain text.** If the macOS Keychain is not available, Roost says so and does not save the sign-in.
+
+### Added
+- **Error log on your Mac.** Roost writes errors to `~/Library/Logs/Roost/roost.log`. Help › Show Error Log opens it. Nothing is sent anywhere.
+- **Intel Macs:** `npm run dist:universal` builds one app for Intel and Apple Silicon.
+- **Automatic tests on GitHub** for each push and pull request.
+
+### Fixed
+- **Email view in small windows.** In a Roost window 980 px wide or less, the List width setting now works, and "Under the list" puts the email under the list (it was next to it).
+
+### Changed
+- Electron 45.5.0 (security fixes) and Anthropic SDK 1.14.0.
+
 ## 0.2.2 — 2026-11-27
 
 Safety and reliability fixes.

@@ -5,7 +5,7 @@ const Anthropic = require('@anthropic-ai/sdk');
 
 const MODEL = 'claude-opus-5-5';
 const COMPLETE_MODEL = 'claude-haiku-5-5'; // Smart Compose: cheap and fast
-const IS_PACKAGED = (() => { try { return require('electron').app?.isPackaged === true; } catch { return false; } })();
+const IS_PACKAGED = (() => { try { return !!process.versions.electron && require('electron').app?.isPackaged === true; } catch { return false; } })();
 const STYLES = {
   polish: 'Polish it: fix grammar, make it clear and natural. Keep the meaning, tone and length.',
   formal: 'Make it more formal and professional.',

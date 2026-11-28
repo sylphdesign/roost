@@ -13,6 +13,23 @@ function devEnv(name) { return app.isPackaged ? undefined : process.env[name]; }
 
 if (devEnv('ROOST_USER_DATA')) app.setPath('userData', devEnv('ROOST_USER_DATA'));
 
+// Errors go to a log file on this Mac only (~/Library/Logs/Roost/roost.log). Nothing is sent anywhere.
+const LOG_MAX_BYTES = 1024 * 1024;
+function logFilePath() { return path.join(app.getPath('logs'), 'roost.log'); }
+function logError(kind, err) {
+  try {
+    const file = logFilePath();
+    fs.mkdirSync(path.dirname(file), { recursive: true });
+    try { if (fs.statSync(file).size > LOG_MAX_BYTES) fs.renameSync(file, `${file}.1`); } catch { /* no file yet */ }
+    const text = err && err.stack ? err.stack : String(err);
+    fs.appendFileSync(file, `${new Date().toISOString()} [${kind}] v${app.getVersion()} ${text}\n`);
+  } catch { /* logging must never crash the app */ }
+}
+process.on('uncaughtException', (err) => { logError('uncaughtException', err); console.error(err); });
+process.on('unhandledRejection', (err) => { logError('unhandledRejection', err); console.error(err); });
+app.on('render-process-gone', (_e, wc, details) => logError('render-process-gone', `${details.reason} (exit ${details.exitCode}) ${(() => { try { return wc.getURL().split('?')[0]; } catch { return ''; } })()}`));
+app.on('child-process-gone', (_e, details) => { if (details.reason !== 'clean-exit') logError('child-process-gone', `${details.type} ${details.reason} (exit ${details.exitCode})`); });
+
 const store = require('./store');
 const { PRESETS, GROUPS } = require('./presets');
 const { runAiTask } = require('./ai');
@@ -1427,7 +1444,18 @@ function buildMenu() {
     { role: 'windowMenu' },
     {
       role: 'help',
-      submenu: [{ label: 'Keyboard Shortcuts', accelerator: 'CmdOrCtrl+/', click: () => showUiPanel('ui:shortcuts') }],
+      submenu: [
+        { label: 'Keyboard Shortcuts', accelerator: 'CmdOrCtrl+/', click: () => showUiPanel('ui:shortcuts') },
+        { type: 'separator' },
+        {
+          label: 'Show Error Log',
+          click: () => {
+            const file = logFilePath();
+            if (fs.existsSync(file)) shell.showItemInFolder(file);
+            else dialog.showMessageBox(win, { message: 'No errors so far.', detail: 'Roost writes errors to a log file on this Mac only. Nothing is sent anywhere.' });
+          },
+        },
+      ],
     },
   ];
   Menu.setApplicationMenu(Menu.buildFromTemplate(template));

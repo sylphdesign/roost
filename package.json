@@ -1,7 +1,7 @@
 {
   "name": "roost",
   "productName": "Roost",
-  "version": "0.2.2",
+  "version": "0.2.3",
   "description": "Roost: every conversation comes home. Gmail, Google Calendar, WhatsApp, Slack, Telegram, Discord and Google apps in one macOS window.",
   "author": "sylphdesign",
   "license": "MIT",
@@ -29,9 +29,10 @@
     "start": "electron .",
     "test": "node --test test/*.test.js",
     "dist": "npm run build:native && electron-builder --mac dmg --arm64",
+    "dist:universal": "npm run build:native && electron-builder --mac dmg --universal",
     "pack": "npm run build:native && electron-builder --mac dir --arm64",
     "test:e2e": "electron test/recipes.e2e.js",
-    "build:native": "mkdir -p build/bin && clang -O2 -arch arm64 -mmacosx-version-min=12.0 -framework CoreAudio -o build/bin/mic-watch native/mic-watch.c",
+    "build:native": "mkdir -p build/bin && clang -O2 -arch arm64 -arch x86_64 -mmacosx-version-min=12.0 -framework CoreAudio -o build/bin/mic-watch native/mic-watch.c",
     "test:all": "node test/run-all.js",
     "icons": "electron scripts/make-icons.js",
     "screenshots": "node scripts/screenshots.js"
@@ -51,7 +52,8 @@
       },
       "identity": "-",
       "hardenedRuntime": false,
-      "icon": "build/icon.icns"
+      "icon": "build/icon.icns",
+      "x64ArchFiles": "Contents/Resources/bin/mic-watch"
     },
     "extraResources": [
       {
