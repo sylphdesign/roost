@@ -187,7 +187,20 @@
       <h2>Releases</h2>
     </header>
     <article class="release reveal">
-      <div class="release-head"><span class="tag latest">Latest</span><h3>Roost 0.2.2</h3><time datetime="2026-11-27">27 Nov 2026</time></div>
+      <div class="release-head"><span class="tag latest">Latest</span><h3>Roost 0.2.3</h3><time datetime="2026-11-27">27 Nov 2026</time></div>
+      <p>Safer attachments, an error log, and a build for Intel Macs.</p>
+      <ul>
+        <li><b>Only files you pick can be attached</b> to an email.</li>
+        <li><b>Google sign-ins are never saved as plain text.</b></li>
+        <li><b>Error log on your Mac:</b> Help › Show Error Log. Nothing is sent anywhere.</li>
+        <li><b>Intel Macs:</b> one build for Intel and Apple Silicon.</li>
+        <li><b>Email view in small windows:</b> List width and "Under the list" now work.</li>
+        <li>Electron with the latest security fixes.</li>
+      </ul>
+      <a class="release-link" href="https://github.com/sylphdesign/roost/releases/tag/v0.2.3">Release notes →</a>
+    </article>
+    <article class="release reveal">
+      <div class="release-head"><h3>Roost 0.2.2</h3><time datetime="2026-11-27">27 Nov 2026</time></div>
       <p>Safety and reliability fixes.</p>
       <ul>
         <li><b>Safer links:</b> a fake link cannot open a look-alike page inside Roost. Other pages open in your browser.</li>
@@ -233,7 +246,7 @@
     <header class="section-head reveal">
       <p class="kicker">Get started</p>
       <h2>Build it in five commands.</h2>
-      <p class="sub">Needs a Mac with Apple Silicon, Node.js 20+ and Xcode Command Line Tools.</p>
+      <p class="sub">Needs a Mac with Apple Silicon, Node.js 20+ and Xcode Command Line Tools. On an Intel Mac, build with <code>npm run dist:universal</code>.</p>
     </header>
     <pre class="code reveal"><code>git clone https://github.com/sylphdesign/roost.git
 cd roost
